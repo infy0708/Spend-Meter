@@ -79,8 +79,13 @@ jobs:
           SM_KEYSTORE_B64: ${{ secrets.SM_KEYSTORE_B64 }}
           SM_KEYSTORE_PASSWORD: ${{ secrets.SM_KEYSTORE_PASSWORD }}
         run: |
-          echo "$SM_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          # Remove any spaces or line breaks picked up while copy-pasting the key.
+          CLEAN_KEY="$(printf '%s' "$SM_KEYSTORE_B64" | tr -d ' \r\n\t')"
+          echo "Signing key text length after cleanup: ${#CLEAN_KEY} (expected 3564)"
+          printf '%s' "$CLEAN_KEY" | base64 -d > "$RUNNER_TEMP/release.jks"
           export SM_KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
+          # Must match the SHA-1 registered in Firebase: 57:4F:9B:63:...:B1:03
+          keytool -list -v -keystore "$SM_KEYSTORE_PATH" -storepass "$SM_KEYSTORE_PASSWORD" -alias spendmeter | grep "SHA1:"
           cd android
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
