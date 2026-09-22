@@ -79,8 +79,9 @@ jobs:
           SM_KEYSTORE_B64: ${{ secrets.SM_KEYSTORE_B64 }}
           SM_KEYSTORE_PASSWORD: ${{ secrets.SM_KEYSTORE_PASSWORD }}
         run: |
-          # Remove any spaces or line breaks picked up while copy-pasting the key.
-          CLEAN_KEY="$(printf '%s' "$SM_KEYSTORE_B64" | tr -d ' \r\n\t')"
+          # Keep only the long base64 key text, dropping any spaces, line breaks
+          # or neighbouring lines picked up while copy-pasting it.
+          CLEAN_KEY="$(printf '%s' "$SM_KEYSTORE_B64" | tr -d ' \r\t' | grep -oE '[A-Za-z0-9+/]{1000,}={0,2}' | head -1)"
           echo "Signing key text length after cleanup: ${#CLEAN_KEY} (expected 3564)"
           printf '%s' "$CLEAN_KEY" | base64 -d > "$RUNNER_TEMP/release.jks"
           export SM_KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
