@@ -1,0 +1,103 @@
+name: Build Android APK
+
+# Builds the Spend Meter Android app from SpendMeter.html and publishes the
+# APK on the repo's Releases page. Runs on every change to the app, or by
+# hand from the Actions tab ("Run workflow").
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'SpendMeter.html'
+      - 'app/**'
+      - '.github/workflows/build-apk.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - name: Check signing key is set up
+        id: check
+        working-directory: .
+        env:
+          SM_KEYSTORE_B64: ${{ secrets.SM_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$SM_KEYSTORE_B64" ]; then
+            echo "::warning::Signing key secrets are not added yet - skipping the APK build."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.ready == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.ready == 'true'
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        if: steps.check.outputs.ready == 'true'
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install packages
+        if: steps.check.outputs.ready == 'true'
+        run: npm ci
+
+      - name: Prepare web files (bundle Firebase so the app opens offline)
+        if: steps.check.outputs.ready == 'true'
+        run: |
+          mkdir -p www
+          cp ../SpendMeter.html www/index.html
+          for m in app auth firestore; do
+            cp node_modules/firebase/firebase-$m-compat.js www/
+            sed -i "s#https://www.gstatic.com/firebasejs/[0-9.]*/firebase-$m-compat.js#firebase-$m-compat.js#" www/index.html
+          done
+          test "$(grep -c 'src="firebase-' www/index.html)" = "3"
+
+      - name: Create Android project
+        if: steps.check.outputs.ready == 'true'
+        run: |
+          npx cap add android
+          cp google-services.json android/app/
+          python3 patch_android.py ${{ github.run_number }}
+          npx @capacitor/assets generate --android --iconBackgroundColor '#0d1b2e' --iconBackgroundColorDark '#0d1b2e' --splashBackgroundColor '#0d1b2e' --splashBackgroundColorDark '#0d1b2e'
+          npx cap sync android
+
+      - name: Build signed APK
+        if: steps.check.outputs.ready == 'true'
+        env:
+          SM_KEYSTORE_B64: ${{ secrets.SM_KEYSTORE_B64 }}
+          SM_KEYSTORE_PASSWORD: ${{ secrets.SM_KEYSTORE_PASSWORD }}
+        run: |
+          echo "$SM_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          export SM_KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/SpendMeter.apk"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.check.outputs.ready == 'true'
+        with:
+          name: SpendMeter-apk
+          path: SpendMeter.apk
+
+      - name: Publish on Releases page
+        if: steps.check.outputs.ready == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: Spend Meter 1.0.${{ github.run_number }}
+          body: Open this page on your Android phone and tap SpendMeter.apk to download and install.
+          files: SpendMeter.apk
+          make_latest: true
