@@ -1,0 +1,27 @@
+{
+  "project_info": {
+    "project_number": "569152179406",
+    "project_id": "spend-meter-1f407",
+    "storage_bucket": "spend-meter-1f407.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:569152179406:android:def1d715b1cf444216149f",
+        "android_client_info": { "package_name": "com.safi.spendmeter" }
+      },
+      "oauth_client": [
+        { "client_id": "569152179406-ubojvvv8ktncdkbmh17fgo9ssa61ml51.apps.googleusercontent.com", "client_type": 3 }
+      ],
+      "api_key": [ { "current_key": "AIzaSyC9qW7ckGfCk3marpDYKBUUBUFL8OIVRxE" } ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            { "client_id": "569152179406-ubojvvv8ktncdkbmh17fgo9ssa61ml51.apps.googleusercontent.com", "client_type": 3 }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

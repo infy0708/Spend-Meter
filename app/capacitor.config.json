@@ -1,0 +1,11 @@
+{
+  "appId": "com.safi.spendmeter",
+  "appName": "Spend Meter",
+  "webDir": "www",
+  "plugins": {
+    "FirebaseAuthentication": {
+      "skipNativeAuth": true,
+      "providers": ["google.com"]
+    }
+  }
+}
