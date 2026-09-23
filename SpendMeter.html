@@ -6920,7 +6920,7 @@ function exportReportPDF(){
   const rows = isLedger
     ? reportLedgerRows(txns).map(({txn:t, account:acc, runningBalance})=>{
         const cat = catInfo(t.category);
-        const sign = t.type==='expense' ? '-' : '+';
+        const sign = (t.type==='expense' || t.type==='transfer_out') ? '-' : '+';
         return [
           reportDateFmt(new Date(t.date+'T00:00:00')),
           t.merchant || '-',
@@ -6934,7 +6934,7 @@ function exportReportPDF(){
     : txns.map(t=>{
         const acc = db.accounts.find(a=>a.id===t.accountId);
         const cat = catInfo(t.category);
-        const sign = t.type==='expense' ? '-' : '+';
+        const sign = (t.type==='expense' || t.type==='transfer_out') ? '-' : '+';
         return [
           reportDateFmt(new Date(t.date+'T00:00:00')),
           t.merchant || '-',
@@ -7816,6 +7816,14 @@ document.addEventListener('backbutton', function(e){
   }
   // else: let the default Cordova behavior (minimize/exit) happen.
 }, false);
+// Capacitor hardware back button (Android) — fires when app is wrapped in Capacitor
+if(isNativeApp() && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App){
+  window.Capacitor.Plugins.App.addListener('backButton', function({ canGoBack }){
+    const id = topOpenSheetId();
+    if(id){ closeSheet(id); }
+    else if(!canGoBack){ window.Capacitor.Plugins.App.exitApp(); }
+  });
+}
 
 function navGo(where){
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.nav===where));
