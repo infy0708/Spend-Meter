@@ -1318,6 +1318,7 @@ canvas{width:100%; display:block;}
 
         <button class="btn secondary" id="splitBillBtn" onclick="openSplitBill()" style="margin-bottom:10px;">Split bill</button>
         <button class="btn secondary" id="linkSplitBtn" onclick="openChooseExistingSplitForTxn()" style="margin-bottom:10px; display:none;">🔗 Link to split (received payment)</button>
+        <button class="btn secondary" id="readSmsBtn" onclick="readSmsClipboard()" style="margin-bottom:10px;">📲 Read SMS</button>
         <button class="btn" id="addTxnBtn" onclick="saveManualTxn()">Add Transaction</button>
       </div>
     </div>
@@ -2686,6 +2687,73 @@ function tutNav(dir) {
     return;
   }
   renderTutorial();
+}
+
+
+function readSmsClipboard(){
+  // Auto-clear all fields before filling from SMS
+  document.getElementById('txnAmountInput').value = '';
+  document.getElementById('mMerchant').value = '';
+  document.getElementById('mNote').value = '';
+  txnSelectedCat = null;
+  document.getElementById('txnCatRowVal').textContent = '🏷️ Category';
+  navigator.clipboard.readText().then(text => {
+    if (!text || text.trim().length < 10) { showToast('No SMS in clipboard'); return; }
+    parseBankSms(text.trim());
+  }).catch(() => showToast('Copy the bank SMS first, then tap Read SMS'));
+}
+
+function parseBankSms(sms){
+  // Detect amount (INR, SAR, AED, USD, Rs., SR, etc.)
+  const amtMatch = sms.match(/(?:INR|SAR|AED|USD|PKR|BDT|Rs\.?|SR)\s*([0-9,]+\.?[0-9]*)|([0-9,]+\.?[0-9]*)\s*(?:INR|SAR|AED|USD|PKR|BDT|Rs\.?|SR)/i);
+  const amount = amtMatch ? parseFloat((amtMatch[1]||amtMatch[2]).replace(/,/g,'')) : null;
+  if (!amount || amount <= 0) { showToast('Amount not found in SMS'); return; }
+
+  // Detect debit or credit
+  const isDebit = /\b(debited?|debit|withdrawn|withdraw|spent|paid|sent|purchase|charged)\b/i.test(sms);
+  const isCredit = /\b(credited?|credit|received|deposited|refund|reversal)\b/i.test(sms);
+  const txnType = (isCredit && !isDebit) ? 'income' : 'expense';
+
+  // Detect account/card last 4 digits
+  const acctMatch = sms.match(/(?:A\/C|Acct?\.?|account|card|a\/c)\s*(?:no\.?\s*)?(?:XX+|x+|\*+|ending\s+)?([0-9]{4})\b/i)
+    || sms.match(/(?:XX+|x+|\*+)([0-9]{4})\b/i);
+  const last4 = acctMatch ? acctMatch[1] : null;
+
+  // Detect merchant/payee
+  const merchantMatch = sms.match(/\bat\s+([A-Za-z0-9][A-Za-z0-9\s\-&'.]+?)(?:\s+on\s|\s+Ref\s|\s+Info|\.|,|\n|$)/i)
+    || sms.match(/\bto\s+([A-Za-z0-9][A-Za-z0-9\s\-&'.@]+?)(?:\s+on\s|\s+Ref\s|\s+UPI|\.|,|\n|$)/i);
+  const merchant = merchantMatch ? merchantMatch[1].trim().substring(0, 40) : '';
+
+  // Fill amount
+  document.getElementById('txnAmountInput').value = amount;
+
+  // Set type button
+  setTxnType(txnType);
+  document.querySelectorAll('#txnTypeSeg button').forEach(b => b.classList.toggle('active', b.dataset.v === txnType));
+  document.getElementById('addTxnBtn').style.background = txnType === 'expense' ? 'var(--red)' : 'var(--green)';
+
+  // Fill merchant
+  if (merchant) document.getElementById('mMerchant').value = merchant;
+
+  // Match or auto-create account by last 4 digits
+  if (last4) {
+    let acc = db.accounts.find(a => !a.archived && a.name.replace(/\s/g,'').includes(last4));
+    if (!acc) {
+      const bankMatch = sms.match(/\b([A-Z][A-Za-z]{2,10})\s*(?:Bank|BANK)\b/);
+      const bankLabel = bankMatch ? bankMatch[1] + ' Bank' : 'Bank';
+      const accName = bankLabel + ' ×' + last4;
+      acc = { id: uid(), name: accName, type: 'bank',
+              currency: db.settings.defaultCurrency || 'SAR',
+              balance: 0, color: 'blue', includeInTotal: true, subtype: 'Current',
+              createdAt: Date.now(), balanceHistory: [] };
+      db.accounts.push(acc);
+      save();
+      showToast('New account: ' + accName);
+    }
+    pickAccount(acc.id);
+  }
+
+  showToast('✅ SMS read — verify & save');
 }
 
 // Newest copy wins: compares when this device last changed data with when
