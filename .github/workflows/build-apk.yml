@@ -70,7 +70,13 @@ jobs:
           npx cap add android
           cp google-services.json android/app/
           python3 patch_android.py ${{ github.run_number }}
-          npx @capacitor/assets generate --android --iconBackgroundColor '#0d1b2e' --iconBackgroundColorDark '#0d1b2e' --splashBackgroundColor '#0d1b2e' --splashBackgroundColorDark '#0d1b2e'
+          # Copy pre-built icons directly - bypasses @capacitor/assets generate
+          for density in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
+            dest="android/app/src/main/res/$density"
+            mkdir -p "$dest"
+            cp "prebuilt-icons/$density/ic_launcher.png"       "$dest/ic_launcher.png"
+            cp "prebuilt-icons/$density/ic_launcher_round.png" "$dest/ic_launcher_round.png"
+          done
           npx cap sync android
 
       - name: Build signed APK
