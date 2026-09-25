@@ -77,22 +77,24 @@ jobs:
             cp "prebuilt-icons/$density/ic_launcher.png"       "$dest/ic_launcher.png"
             cp "prebuilt-icons/$density/ic_launcher_round.png" "$dest/ic_launcher_round.png"
           done
-          # Fix PNG icons with Python PIL for AAPT2 compatibility
-          python3 -c '
-import os, glob
-try:
-  from PIL import Image
-except ImportError:
-  import subprocess; subprocess.run(["pip3","install","Pillow","--quiet"], check=True)
-  from PIL import Image
-for f in glob.glob("android/app/src/main/res/**/*.png", recursive=True):
-  img = Image.open(f).convert("RGBA")
-  tmp = f + ".new"
-  img.save(tmp, format="PNG")
-  os.replace(tmp, f)
-  print("fixed:", f)
-'
-          npx cap sync android
+          # Fix PNG icons with Python Pillow (prevents AAPT2 daemon crash)
+        cat > /tmp/fix_icons.py << 'PYEOF'
+        import os, glob
+        try:
+            from PIL import Image
+        except ImportError:
+            import subprocess
+            subprocess.run(["pip3","install","Pillow","-q"], check=True)
+            from PIL import Image
+        for f in glob.glob("android/app/src/main/res/**/*.png", recursive=True):
+            img = Image.open(f).convert("RGBA")
+            tmp = f + ".new"
+            img.save(tmp, "PNG")
+            os.replace(tmp, f)
+            print("fixed:", f)
+        PYEOF
+        python3 /tmp/fix_icons.py
+        npx cap sync android
 
       - name: Build signed APK
         if: steps.check.outputs.ready == 'true'
