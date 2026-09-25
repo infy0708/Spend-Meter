@@ -1,8 +1,4 @@
 name: Build Android APK
-
-# Builds the Spend Meter Android app from SpendMeter.html and publishes the
-# APK on the repo's Releases page. Runs on every change to the app, or by
-# hand from the Actions tab ("Run workflow").
 on:
   workflow_dispatch:
   push:
@@ -11,10 +7,8 @@ on:
       - 'SpendMeter.html'
       - 'app/**'
       - '.github/workflows/build-apk.yml'
-
 permissions:
   contents: write
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -34,25 +28,20 @@ jobs:
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
-
       - uses: actions/checkout@v4
         if: steps.check.outputs.ready == 'true'
-
       - uses: actions/setup-node@v4
         if: steps.check.outputs.ready == 'true'
         with:
           node-version: 22
-
       - uses: actions/setup-java@v4
         if: steps.check.outputs.ready == 'true'
         with:
           distribution: temurin
           java-version: 21
-
       - name: Install packages
         if: steps.check.outputs.ready == 'true'
         run: npm ci
-
       - name: Prepare web files (bundle Firebase so the app opens offline)
         if: steps.check.outputs.ready == 'true'
         run: |
@@ -63,7 +52,6 @@ jobs:
             sed -i "s#https://www.gstatic.com/firebasejs/[0-9.]*/firebase-$m-compat.js#firebase-$m-compat.js#" www/index.html
           done
           test "$(grep -c 'src="firebase-' www/index.html)" = "3"
-
       - name: Create Android project
         if: steps.check.outputs.ready == 'true'
         run: |
@@ -74,53 +62,45 @@ jobs:
           for density in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
             dest="android/app/src/main/res/$density"
             mkdir -p "$dest"
-            cp "prebuilt-icons/$density/ic_launcher.png"       "$dest/ic_launcher.png"
+            cp "prebuilt-icons/$density/ic_launcher.png" "$dest/ic_launcher.png"
             cp "prebuilt-icons/$density/ic_launcher_round.png" "$dest/ic_launcher_round.png"
           done
-          # Fix PNG icons with Python Pillow (prevents AAPT2 daemon crash)
-        cat > /tmp/fix_icons.py << 'PYEOF'
-        import os, glob
-        try:
-            from PIL import Image
-        except ImportError:
-            import subprocess
-            subprocess.run(["pip3","install","Pillow","-q"], check=True)
-            from PIL import Image
-        for f in glob.glob("android/app/src/main/res/**/*.png", recursive=True):
-            img = Image.open(f).convert("RGBA")
-            tmp = f + ".new"
-            img.save(tmp, "PNG")
-            os.replace(tmp, f)
-            print("fixed:", f)
-        PYEOF
-        python3 /tmp/fix_icons.py
-        npx cap sync android
-
+          # Fix PNG icons with Python Pillow to prevent AAPT2 daemon crash
+          python3 << 'PYEOF'
+          import os, glob
+          try:
+              from PIL import Image
+          except ImportError:
+              import subprocess
+              subprocess.run(["pip3","install","Pillow","-q"], check=True)
+              from PIL import Image
+          for f in glob.glob("android/app/src/main/res/**/*.png", recursive=True):
+              img = Image.open(f).convert("RGBA")
+              tmp = f + ".new"
+              img.save(tmp, "PNG")
+              os.replace(tmp, f)
+          PYEOF
+          npx cap sync android
       - name: Build signed APK
         if: steps.check.outputs.ready == 'true'
         env:
           SM_KEYSTORE_B64: ${{ secrets.SM_KEYSTORE_B64 }}
           SM_KEYSTORE_PASSWORD: ${{ secrets.SM_KEYSTORE_PASSWORD }}
         run: |
-          # Keep only the long base64 key text, dropping any spaces, line breaks
-          # or neighbouring lines picked up while copy-pasting it.
           CLEAN_KEY="$(printf '%s' "$SM_KEYSTORE_B64" | tr -d ' \r\t' | grep -oE '[A-Za-z0-9+/]{1000,}={0,2}' | head -1)"
           echo "Signing key text length after cleanup: ${#CLEAN_KEY} (expected 3564)"
           printf '%s' "$CLEAN_KEY" | base64 -d > "$RUNNER_TEMP/release.jks"
           export SM_KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
-          # Must match the SHA-1 registered in Firebase: 57:4F:9B:63:...:B1:03
           keytool -list -v -keystore "$SM_KEYSTORE_PATH" -storepass "$SM_KEYSTORE_PASSWORD" -alias spendmeter | grep "SHA1:"
           cd android
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
           cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/SpendMeter.apk"
-
       - uses: actions/upload-artifact@v4
         if: steps.check.outputs.ready == 'true'
         with:
           name: SpendMeter-apk
           path: SpendMeter.apk
-
       - name: Publish on Releases page
         if: steps.check.outputs.ready == 'true'
         uses: softprops/action-gh-release@v2
