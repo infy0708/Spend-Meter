@@ -66,14 +66,10 @@ jobs:
             cp "prebuilt-icons/$density/ic_launcher_round.png" "$dest/ic_launcher_round.png"
           done
           # Fix PNG icons with Python Pillow to prevent AAPT2 daemon crash
+          pip3 install Pillow -q --break-system-packages || true
           python3 << 'PYEOF'
           import os, glob
-          try:
-              from PIL import Image
-          except ImportError:
-              import subprocess
-              subprocess.run(["pip3","install","Pillow","-q"], check=True)
-              from PIL import Image
+          from PIL import Image
           for f in glob.glob("android/app/src/main/res/**/*.png", recursive=True):
               img = Image.open(f).convert("RGBA")
               tmp = f + ".new"
