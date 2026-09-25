@@ -37,6 +37,6 @@ print('Android project patched, build', build_no)
 # 3. Pin AGP version to avoid AAPT2 daemon crash bugs in newer releases.
 pbg = 'android/build.gradle'
 s = open(pbg).read()
-s = re.sub(r'com\.android\.tools\.build:gradle:[0-9.+]+', 'com.android.tools.build:gradle:8.7.0', s)
+s = re.sub(r'com\.android\.tools\.build:gradle:[0-9.+]+', 'com.android.tools.build:gradle:8.10.2', s)
 open(pbg, 'w').write(s)
-print('Pinned AGP to 8.7.0')
+print('Pinned AGP to 8.10.2')
