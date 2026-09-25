@@ -77,6 +77,13 @@ jobs:
             cp "prebuilt-icons/$density/ic_launcher.png"       "$dest/ic_launcher.png"
             cp "prebuilt-icons/$density/ic_launcher_round.png" "$dest/ic_launcher_round.png"
           done
+          # Re-encode icons as clean RGBA PNGs — AAPT2 newer versions can crash on RGB-only PNGs
+          for density in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
+            d="android/app/src/main/res/$density"
+            for f in ic_launcher.png ic_launcher_round.png; do
+              [ -f "$d/$f" ] && convert "$d/$f" -define png:color-type=6 -type TrueColorAlpha "$d/$f" || true
+            done
+          done
           npx cap sync android
 
       - name: Build signed APK
