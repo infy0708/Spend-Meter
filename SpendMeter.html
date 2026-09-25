@@ -2360,6 +2360,7 @@ canvas{width:100%; display:block;}
             <span class="arrow" onclick="ledgerMonthShift(1)">›</span>
           </div>
           <div class="search-bar">🔎<input type="text" id="ledgerSearch" placeholder="Search remarks or category" oninput="renderLedgerList()"></div>
+          <div class="filter-row" id="ledgerFilterCurrencyRow"></div>
           <div class="filter-row" id="ledgerFilterRow"></div>
           <div class="card" id="ledgerListCard" style="padding:6px 16px; margin-top:10px;"></div>
         </div>
@@ -7268,7 +7269,14 @@ function ledgerMonthShift(delta){
 }
 function ledgerMonthKey(){ return ledgerCursor.getFullYear()+'-'+String(ledgerCursor.getMonth()+1).padStart(2,'0'); }
 function renderLedgerFilterRow(){
+  const currRow = document.getElementById('ledgerFilterCurrencyRow');
   const wrap = document.getElementById('ledgerFilterRow');
+  // Row 1: Currency filter — always shown
+  const currenciesInUse = [];
+  db.accounts.forEach(a=>{ if(!currenciesInUse.includes(a.currency)) currenciesInUse.push(a.currency); });
+  currRow.innerHTML = `<div class="chip ${ledgerFilterCurrency===null?'active':''}" onclick="setLedgerFilterCurrency(null)">🌐 All currencies</div>`
+    + currenciesInUse.map(cur=>`<div class="chip ${ledgerFilterCurrency===cur?'active':''}" onclick="setLedgerFilterCurrency('${cur}')">${currencyFlag(cur)} ${cur}</div>`).join('');
+  // Row 2: Type + account filters
   if(ledgerCategoryFilter){
     const c = catInfo(ledgerCategoryFilter);
     wrap.innerHTML = `<div class="chip active">${c.icon} ${catDisplayName(ledgerCategoryFilter)} <span style="margin-left:4px; cursor:pointer;" onclick="clearLedgerCategoryFilter()">✕</span></div>`;
@@ -7280,18 +7288,13 @@ function renderLedgerFilterRow(){
     {id:'income', label:'Income', active: ledgerFilterType==='income'},
     {id:'transfer', label:'Transfer', active: ledgerFilterType==='transfer'}
   ];
-  // Currencies actually in use across accounts — only worth offering as a
-  // filter when there's more than one, otherwise it's a chip that never does anything.
-  const currenciesInUse = [];
-  db.accounts.forEach(a=>{ if(!currenciesInUse.includes(a.currency)) currenciesInUse.push(a.currency); });
   wrap.innerHTML = chips.map(c=>`<div class="chip ${c.active?'active':''}" onclick="setLedgerFilterType('${c.id}')">${c.label}</div>`).join('')
     + `<div class="chip ${ledgerFilterUncategorised?'active':''}" style="${ledgerFilterUncategorised?'':'color:var(--red); border-color:#f6c9c4;'}" onclick="toggleLedgerFilterUncategorised()">❓ Uncategorised</div>`
-    + db.accounts.map(a=>`<div class="chip ${ledgerFilterAcct===a.id?'active':''}" onclick="setLedgerFilterAcct('${a.id}')">${a.name}</div>`).join('')
-    + (currenciesInUse.length>1 ? currenciesInUse.map(cur=>`<div class="chip ${ledgerFilterCurrency===cur?'active':''}" onclick="setLedgerFilterCurrency('${cur}')">${currencyFlag(cur)} ${cur}</div>`).join('') : '');
+    + db.accounts.map(a=>`<div class="chip ${ledgerFilterAcct===a.id?'active':''}" onclick="setLedgerFilterAcct('${a.id}')">${a.name}</div>`).join('');
 }
 function setLedgerFilterType(t){ ledgerFilterType = t; renderLedgerFilterRow(); renderLedgerList(); }
 function setLedgerFilterAcct(id){ ledgerFilterAcct = (ledgerFilterAcct===id) ? null : id; renderLedgerFilterRow(); renderLedgerList(); }
-function setLedgerFilterCurrency(cur){ ledgerFilterCurrency = (ledgerFilterCurrency===cur) ? null : cur; renderLedgerFilterRow(); renderLedgerList(); }
+function setLedgerFilterCurrency(cur){ ledgerFilterCurrency = cur; renderLedgerFilterRow(); renderLedgerList(); }
 function toggleLedgerFilterUncategorised(){ ledgerFilterUncategorised = !ledgerFilterUncategorised; renderLedgerFilterRow(); renderLedgerList(); }
 
 function renderLedgerTransactionsPage(){
