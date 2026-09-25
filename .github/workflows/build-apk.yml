@@ -66,13 +66,13 @@ jobs:
             cp "prebuilt-icons/$density/ic_launcher_round.png" "$dest/ic_launcher_round.png"
           done
           # Disable AAPT2 PNG crunching to prevent daemon crash on icon PNGs
-          python3 -c "
-s = open('android/app/build.gradle').read()
-if 'cruncherEnabled' not in s:
-    s = s.replace('android {', 'android {\n    aaptOptions { cruncherEnabled = false }', 1)
-    open('android/app/build.gradle', 'w').write(s)
-    print('Disabled AAPT2 PNG cruncher')
-"
+          python3 << 'PYEOF'
+          s = open('android/app/build.gradle').read()
+          if 'cruncherEnabled' not in s:
+              s = s.replace('android {', 'android {\n    aaptOptions { cruncherEnabled = false }', 1)
+              open('android/app/build.gradle', 'w').write(s)
+              print('Disabled AAPT2 PNG cruncher')
+          PYEOF
           npx cap sync android
       - name: Build signed APK
         if: steps.check.outputs.ready == 'true'
