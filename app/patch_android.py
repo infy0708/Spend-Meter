@@ -33,3 +33,10 @@ s = re.sub(r'versionName "[^"]*"', f'versionName "1.0.{build_no}"', s)
 open(ag, 'w').write(s)
 assert 'signingConfig signingConfigs.release' in s, 'signing patch failed'
 print('Android project patched, build', build_no)
+
+# 3. Pin AGP version to avoid AAPT2 daemon crash bugs in newer releases.
+pbg = 'android/build.gradle'
+s = open(pbg).read()
+s = re.sub(r'com\.android\.tools\.build:gradle:[0-9.+]+', 'com.android.tools.build:gradle:8.7.0', s)
+open(pbg, 'w').write(s)
+print('Pinned AGP to 8.7.0')
