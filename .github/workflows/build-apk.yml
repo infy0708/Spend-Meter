@@ -77,13 +77,21 @@ jobs:
             cp "prebuilt-icons/$density/ic_launcher.png"       "$dest/ic_launcher.png"
             cp "prebuilt-icons/$density/ic_launcher_round.png" "$dest/ic_launcher_round.png"
           done
-          # Re-encode icons as clean RGBA PNGs — AAPT2 newer versions can crash on RGB-only PNGs
-          for density in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
-            d="android/app/src/main/res/$density"
-            for f in ic_launcher.png ic_launcher_round.png; do
-              [ -f "$d/$f" ] && convert "$d/$f" -define png:color-type=6 -type TrueColorAlpha "$d/$f" || true
-            done
-          done
+          # Fix PNG icons with Python PIL for AAPT2 compatibility
+          python3 -c '
+import os, glob
+try:
+  from PIL import Image
+except ImportError:
+  import subprocess; subprocess.run(["pip3","install","Pillow","--quiet"], check=True)
+  from PIL import Image
+for f in glob.glob("android/app/src/main/res/**/*.png", recursive=True):
+  img = Image.open(f).convert("RGBA")
+  tmp = f + ".new"
+  img.save(tmp, format="PNG")
+  os.replace(tmp, f)
+  print("fixed:", f)
+'
           npx cap sync android
 
       - name: Build signed APK
