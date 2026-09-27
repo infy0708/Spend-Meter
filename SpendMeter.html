@@ -2764,7 +2764,7 @@ canvas{width:100%; display:block;}
 ===================================================================== */
 
 /* ---------------- APP VERSION ---------------- */
-const APP_VERSION = '1.0.33'; // e.g. build 33 → tag apk-33
+const APP_VERSION = '1.0.34'; // e.g. build 34 → tag apk-34
 
 /* ---------------- FIREBASE SETUP ---------------- */
 const FIREBASE_CONFIG = {
@@ -2798,6 +2798,8 @@ if (FIREBASE_READY) {
       if (signedInAsEl) signedInAsEl.textContent = 'Signed in as ' + (user.email || '');
       const changed = await pullCloudData();
       if (changed) { load(); renderAll(); }
+      // Check for app updates only AFTER confirmed login (not on login screen)
+      setTimeout(checkForUpdate, 4000);
     } else {
       // No user signed in: keep / restore the login gate
       if (gate) gate.classList.remove('hidden');
@@ -2805,10 +2807,12 @@ if (FIREBASE_READY) {
     }
   });
 } else {
-  // Firebase unavailable (offline / no network on first load) — hide the gate
-  // so the app works in fully-local offline mode without requiring a sign-in.
+  // Firebase unavailable (offline / no network on first load).
+  // Keep the login gate VISIBLE — do NOT bypass login when offline.
+  // The login/signup buttons already show "No internet" errors, so the user
+  // knows they need connectivity. This prevents anyone from skipping login.
   const gate = document.getElementById('loginGate');
-  if (gate) gate.classList.add('hidden');
+  if (gate) gate.classList.remove('hidden'); // ensure gate stays visible
 }
 
 const LOCAL_MTIME_KEY = 'spendmete_local_mtime';
@@ -8209,12 +8213,19 @@ function dismissUpdatePopup() {
 }
 
 function installUpdate() {
-  // Opens the APK download URL; Android prompts to install on top of current app
+  // Opens the APK download URL in external browser; Android prompts to install on top of current app
   const url = 'https://github.com/infy0708/Spend-Meter/releases/latest/download/SpendMeter.apk';
-  if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Browser) {
-    window.Capacitor.Plugins.Browser.open({ url });
-  } else {
-    window.open(url, '_system');
+  try {
+    // Capacitor preferred method — opens in device's default browser/download manager
+    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Browser) {
+      window.Capacitor.Plugins.Browser.open({ url: url });
+    } else {
+      // Fallback: _system target tells Capacitor WebView to open outside the app
+      window.open(url, '_system');
+    }
+  } catch(e) {
+    // Last resort
+    window.location.href = url;
   }
   dismissUpdatePopup();
 }
@@ -8226,8 +8237,6 @@ function init(){
   fillAccountSelects();
   renderAll();
   initAppLock();
-  // Check for update after a short delay so the app feels snappy on first open
-  setTimeout(checkForUpdate, 4000);
 }
 init();
 
