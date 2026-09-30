@@ -2790,7 +2790,7 @@ canvas{width:100%; display:block;}
 ===================================================================== */
 
 /* ---------------- APP VERSION ---------------- */
-const APP_VERSION = '1.0.40'; // e.g. build 38 → tag apk-38
+const APP_VERSION = '1.0.42'; // e.g. build 38 → tag apk-38
 
 /* ---------------- FIREBASE SETUP ---------------- */
 const FIREBASE_CONFIG = {
@@ -2911,7 +2911,7 @@ async async function readBankSms(autoMode) {
     if (!SmsReader) { if (!autoMode) showToast('SMS plugin not available'); return; }
     const result = await SmsReader.readRecentSms();
     const msgs = (result && result.messages) || [];
-    const bankRe = /\b(debit|credit|debited|credited|withdraw|deposit|transfer|payment|paid|received|charged|spent|transaction|balance|avl\s*bal|available\s*bal)\b/i;
+    const bankRe = /\b(debit|credit|debited|credited|withdraw(?:n|al)?|deposit|transfer|payment|paid|received|charged|spent|transaction|balance|avl\s*bal|available\s*bal|ATM)\b/i;
     const amountRe = /(?:SAR|AED|USD|EUR|GBP|INR|QAR|KWD|BHD|OMR|EGP|PKR|BDT|LKR|NGN|ZAR|MYR|SGD|THB|JPY|CNY|HKD|CAD|AUD|CHF|TRY|MXN|BRL|RUB|IDR|PHP|MAD|DZD|TND|JOD|LBP|IQD)\s*[\d,]+(?:\.\d+)?|[\d,]+(?:\.\d+)?\s*(?:SAR|AED|USD|EUR|GBP|INR|QAR|KWD)/i;
     const filtered = msgs.filter(m => bankRe.test(m.body) && amountRe.test(m.body));
     if (filtered.length === 0) {
