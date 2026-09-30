@@ -1109,6 +1109,16 @@ canvas{width:100%; display:block;}
       <div style="text-align:center; margin-top:4px; cursor:pointer; color:var(--ink-soft);" onclick="toggleMioCollapse()"><span id="mioChevron">⌃</span></div>
     </div>
 
+    <!-- ── Read Bank SMS tile ── -->
+    <div class="feat-tile" id="readSmsTile" onclick="readBankSms(false)" style="margin:14px 0 4px;">
+      <div class="fi">📩</div>
+      <div class="ft">
+        <div class="ftn">Read Bank SMS</div>
+        <div class="fts" id="smsReadStatus">Tap to scan last 24h bank transactions</div>
+      </div>
+      <div id="smsBadge" style="display:none; background:var(--blue); color:#fff; border-radius:99px; padding:2px 8px; font-size:11px; font-weight:700; margin-right:6px;"></div>
+      <div class="farrow">›</div>
+    </div>
     <div class="section-title" style="margin-top:18px;">Overview</div>
     <div class="two-tile">
       <div class="tile" onclick="openSheet('sheetCategories')">
@@ -1598,7 +1608,18 @@ canvas{width:100%; display:block;}
     </div>
   </div>
 
-  <!-- ===================== SHEET: Add Transaction (full screen) ===================== -->
+  <!-- ===================== SHEET: SMS Inbox ===================== -->
+    <div class="overlay" id="ov-sheetSmsInbox">
+      <div class="sheet"><div class="handle"></div>
+        <div class="sheet-head"><h3>📩 Bank SMS Transactions</h3><div class="sheet-close" onclick="closeSheet('sheetSmsInbox')">✕</div></div>
+        <div class="sheet-body">
+          <div style="font-size:12px; color:var(--ink-soft); margin-bottom:14px;">Detected from your last 24 hours of SMS — review and save what you need.</div>
+          <div id="smsInboxList"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== SHEET: Add Transaction (full screen) ===================== -->
   <div class="overlay full" id="ov-sheetManual">
     <div class="sheet"><div class="handle"></div>
       <div class="sheet-head"><h3 id="manualTitle">Add Transaction</h3><div style="display:flex; align-items:center; gap:14px;"><div id="deleteTxnBtn" style="display:none; color:var(--red); font-weight:700; font-size:13.5px; cursor:pointer;" onclick="confirmDeleteTxn()">Delete</div><div class="sheet-close" onclick="cancelManualTxnSheet()">✕</div></div></div>
@@ -2769,7 +2790,7 @@ canvas{width:100%; display:block;}
 ===================================================================== */
 
 /* ---------------- APP VERSION ---------------- */
-const APP_VERSION = '1.0.38'; // e.g. build 38 → tag apk-38
+const APP_VERSION = '1.0.40'; // e.g. build 38 → tag apk-38
 
 /* ---------------- FIREBASE SETUP ---------------- */
 const FIREBASE_CONFIG = {
@@ -2794,24 +2815,43 @@ if (FIREBASE_READY) {
   // The loginGate starts VISIBLE so the login screen is always shown by default;
   // this listener hides it only once Firebase confirms a signed-in user.
   fbAuth.onAuthStateChanged(async function(user) {
+    // SESSION GUARD: force fresh login on every cold app start
+    if (!window._smSessInit) {
+      window._smSessInit = true;
+      if (!sessionStorage.getItem('_smSess')) {
+        sessionStorage.setItem('_smSess', '1');
+        if (user) { await fbAuth.signOut(); return; }
+      }
+    }
     currentUser = user;
     const gate = document.getElementById('loginGate');
     const signedInAsEl = document.getElementById('signedInAs');
     if (user) {
-      // User is signed in — show "Welcome back" briefly, then hide gate
+      // Email verification gate
+      if (!user.emailVerified) {
+        await fbAuth.signOut();
+        const loader = document.getElementById('loginLoader');
+        if (loader) loader.style.display = 'none';
+        if (gate) gate.classList.remove('hidden');
+        const msgEl = document.getElementById('loginMsg');
+        if (msgEl) {
+          msgEl.textContent = '📧 Please verify your email first — check your inbox and click the verification link, then sign in again.';
+          msgEl.className = 'login-msg';
+        }
+        return;
+      }
       if (signedInAsEl) signedInAsEl.textContent = 'Signed in as ' + (user.email || '');
       const loaderMsg = document.getElementById('loginLoaderMsg');
       const loaderSub = document.getElementById('loginLoaderSub');
-      if (loaderMsg) loaderMsg.textContent = 'Welcome back! 👋';
+      if (loaderMsg) loaderMsg.textContent = 'Signing you in... ✅';
       if (loaderSub) loaderSub.textContent = user.email || '';
-      // After 1.2s the user sees who is signed in, then gate closes
-      setTimeout(() => { if (gate) gate.classList.add('hidden'); }, 1200);
+      setTimeout(() => { if (gate) gate.classList.add('hidden'); }, 900);
       const changed = await pullCloudData();
       if (changed) { load(); renderAll(); }
-      // Check for app updates only AFTER confirmed login
       setTimeout(checkForUpdate, 4000);
+      // Auto-scan bank SMS silently on every login
+      setTimeout(() => readBankSms(true), 3000);
     } else {
-      // No user signed in — hide loader overlay, show login form
       const loader = document.getElementById('loginLoader');
       if (loader) loader.style.display = 'none';
       if (gate) gate.classList.remove('hidden');
@@ -2859,7 +2899,85 @@ function switchLoginTab(tab) {
   document.getElementById('tabSignUp').classList.toggle('active', !isSignIn);
 }
 
-async function handleSignIn() {
+async async function readBankSms(autoMode) {
+  const badge  = document.getElementById('smsBadge');
+  const status = document.getElementById('smsReadStatus');
+  if (!window.Capacitor || !window.Capacitor.isNativePlatform()) {
+    if (!autoMode) showToast('SMS reading only works in the installed app');
+    return;
+  }
+  try {
+    const SmsReader = window.Capacitor.Plugins.SmsReader;
+    if (!SmsReader) { if (!autoMode) showToast('SMS plugin not available'); return; }
+    const result = await SmsReader.readRecentSms();
+    const msgs = (result && result.messages) || [];
+    const bankRe = /\b(debit|credit|debited|credited|withdraw|deposit|transfer|payment|paid|received|charged|spent|transaction|balance|avl\s*bal|available\s*bal)\b/i;
+    const amountRe = /(?:SAR|AED|USD|EUR|GBP|INR|QAR|KWD|BHD|OMR|EGP|PKR|BDT|LKR|NGN|ZAR|MYR|SGD|THB|JPY|CNY|HKD|CAD|AUD|CHF|TRY|MXN|BRL|RUB|IDR|PHP|MAD|DZD|TND|JOD|LBP|IQD)\s*[\d,]+(?:\.\d+)?|[\d,]+(?:\.\d+)?\s*(?:SAR|AED|USD|EUR|GBP|INR|QAR|KWD)/i;
+    const filtered = msgs.filter(m => bankRe.test(m.body) && amountRe.test(m.body));
+    if (filtered.length === 0) {
+      if (badge) badge.style.display = 'none';
+      if (status) status.textContent = 'No bank transactions in last 24h';
+      if (!autoMode) showToast('No bank transaction SMS found in last 24 hours');
+      return;
+    }
+    window._smsParsedList = filtered.map(m => {
+      const p = parseSMSText(m.body);
+      return p ? Object.assign(p, { _rawBody: m.body, _rawDate: m.date, _rawAddr: m.address, _saved: false }) : null;
+    }).filter(p => p && p.amount);
+    const count = window._smsParsedList.length;
+    if (badge)  { badge.textContent = count; badge.style.display = count ? '' : 'none'; }
+    if (status) status.textContent = count
+      ? count + ' transaction' + (count > 1 ? 's' : '') + ' found — tap to review'
+      : 'Could not parse amounts from found messages';
+    if (count === 0) { if (!autoMode) showToast('SMS found but amounts could not be parsed'); return; }
+    renderSmsInboxSheet();
+    if (!autoMode) openSheet('sheetSmsInbox');
+    else showToast('📩 ' + count + ' bank SMS found — tap the 📩 tile to review');
+  } catch(e) {
+    if (!autoMode) showToast('Could not read SMS: ' + (e.message || String(e)));
+  }
+}
+
+function renderSmsInboxSheet() {
+  const list = document.getElementById('smsInboxList');
+  if (!list) return;
+  const items = window._smsParsedList || [];
+  if (items.length === 0) { list.innerHTML = '<div style="text-align:center;color:var(--ink-soft);padding:20px;">No transactions to show</div>'; return; }
+  list.innerHTML = items.map((p, i) => {
+    if (p._saved) return '<div style="padding:10px 0;border-bottom:1px solid var(--border);opacity:0.4;">✅ Saved: ' + (p.merchant || 'Transaction') + '</div>';
+    const sign = (p.type === 'credit') ? '+' : '-';
+    const color = (p.type === 'credit') ? 'var(--green)' : 'var(--red,#e53e3e)';
+    return `<div style="padding:12px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <div style="font-weight:600;">${p.merchant || p._rawAddr || 'Bank SMS'}</div>
+        <div style="font-size:11px;color:var(--ink-soft);margin-top:2px;">${new Date(p._rawDate).toLocaleString()}</div>
+        <div style="font-size:11px;color:var(--ink-soft);margin-top:2px;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p._rawBody}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
+        <span style="font-weight:700;color:${color};">${sign}${p.currency || ''} ${p.amount}</span>
+        <button onclick="saveSmsTransaction(${i})" style="background:var(--blue);color:#fff;border:none;border-radius:8px;padding:4px 12px;font-size:12px;cursor:pointer;">Save</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function saveSmsTransaction(i) {
+  const p = (window._smsParsedList || [])[i];
+  if (!p || p._saved) return;
+  addTransaction({
+    amount:   p.amount,
+    type:     p.type || 'expense',
+    category: p.category || 'Other',
+    note:     p.merchant || p._rawAddr || 'Bank SMS',
+    currency: p.currency || baseCurrency || 'SAR',
+    date:     p._rawDate ? new Date(p._rawDate).toISOString().slice(0,10) : new Date().toISOString().slice(0,10),
+  });
+  p._saved = true;
+  renderSmsInboxSheet();
+  showToast('✅ Transaction saved!');
+}
+
+function handleSignIn() {
   const email = (document.getElementById('loginEmail').value || '').trim().toLowerCase();
   const password = document.getElementById('loginPassword').value;
   const msg = document.getElementById('loginMsg');
