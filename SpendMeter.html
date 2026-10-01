@@ -1015,7 +1015,7 @@ canvas{width:100%; display:block;}
 </style>
 
 <div class="login-gate" id="loginGate">
-  <div id="loginLoader" style="position:absolute;inset:0;z-index:10;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--navy);background-image:radial-gradient(circle at 90% -20%,rgba(63,169,245,.35),transparent 60%),radial-gradient(circle at -10% 100%,rgba(15,174,107,.25),transparent 55%);padding:32px 24px;">
+  <div id="loginLoader" style="position:absolute;inset:0;z-index:10;display:none;flex-direction:column;align-items:center;justify-content:center;background:var(--navy);background-image:radial-gradient(circle at 90% -20%,rgba(63,169,245,.35),transparent 60%),radial-gradient(circle at -10% 100%,rgba(15,174,107,.25),transparent 55%);padding:32px 24px;">
     <div style="font-size:52px;margin-bottom:16px;">💰</div>
     <div id="loginLoaderMsg" style="color:rgba(255,255,255,0.9);font-size:16px;font-weight:700;text-align:center;line-height:1.5;">Loading...</div>
     <div id="loginLoaderSub" style="color:rgba(255,255,255,0.55);font-size:13px;margin-top:6px;text-align:center;"></div>
@@ -2790,7 +2790,7 @@ canvas{width:100%; display:block;}
 ===================================================================== */
 
 /* ---------------- APP VERSION ---------------- */
-const APP_VERSION = '1.0.43'; // e.g. build 38 → tag apk-38
+const APP_VERSION = '1.0.44'; // e.g. build 38 → tag apk-38
 
 /* ---------------- FIREBASE SETUP ---------------- */
 const FIREBASE_CONFIG = {
@@ -2815,32 +2815,19 @@ if (FIREBASE_READY) {
   // The loginGate starts VISIBLE so the login screen is always shown by default;
   // this listener hides it only once Firebase confirms a signed-in user.
   fbAuth.onAuthStateChanged(async function(user) {
-    // SESSION GUARD: force fresh login on every cold app start
-    if (!window._smSessInit) {
-      window._smSessInit = true;
-      if (!sessionStorage.getItem('_smSess')) {
-        sessionStorage.setItem('_smSess', '1');
-        if (user) {
-              // Hide splash immediately so user sees login form, not stuck "Loading…"
-              const loader = document.getElementById('loginLoader');
-              if (loader) loader.style.display = 'none';
-              const gate = document.getElementById('loginGate');
-              if (gate) gate.classList.remove('hidden');
-              await fbAuth.signOut();
-              return;
-            }
-      }
-    }
+    // loginLoader is hidden by default — login form always shows instantly on app open.
+    // We only auto-proceed to the app if the user explicitly logged in THIS session.
+    const thisSession = sessionStorage.getItem('_smSess') === '1';
     currentUser = user;
-    const gate = document.getElementById('loginGate');
+    const gate         = document.getElementById('loginGate');
+    const loader       = document.getElementById('loginLoader');
     const signedInAsEl = document.getElementById('signedInAs');
-    if (user) {
-      // Email verification gate
+
+    if (user && thisSession) {
+      // Valid active session — auto-proceed to the app
       if (!user.emailVerified) {
         await fbAuth.signOut();
-        const loader = document.getElementById('loginLoader');
-        if (loader) loader.style.display = 'none';
-        if (gate) gate.classList.remove('hidden');
+        sessionStorage.removeItem('_smSess');
         const msgEl = document.getElementById('loginMsg');
         if (msgEl) {
           msgEl.textContent = '📧 Please verify your email first — check your inbox and click the verification link, then sign in again.';
@@ -2848,23 +2835,25 @@ if (FIREBASE_READY) {
         }
         return;
       }
+      // Show brief signing-in overlay while loading cloud data
+      if (loader) loader.style.display = 'flex';
+      if (gate)   gate.classList.add('hidden');
       if (signedInAsEl) signedInAsEl.textContent = 'Signed in as ' + (user.email || '');
       const loaderMsg = document.getElementById('loginLoaderMsg');
       const loaderSub = document.getElementById('loginLoaderSub');
       if (loaderMsg) loaderMsg.textContent = 'Signing you in... ✅';
       if (loaderSub) loaderSub.textContent = user.email || '';
-      setTimeout(() => { if (gate) gate.classList.add('hidden'); }, 900);
       const changed = await pullCloudData();
       if (changed) { load(); renderAll(); }
       setTimeout(checkForUpdate, 4000);
-      // Auto-scan bank SMS silently on every login
       setTimeout(() => readBankSms(true), 3000);
-    } else {
-      const loader = document.getElementById('loginLoader');
-      if (loader) loader.style.display = 'none';
-      if (gate) gate.classList.remove('hidden');
-      if (signedInAsEl) signedInAsEl.textContent = '';
+
+    } else if (user && !thisSession) {
+      // Cached Firebase user on cold start — sign out silently.
+      // Login form is already visible by default, nothing to show/hide.
+      await fbAuth.signOut();
     }
+    // user === null: login form is already visible by default — nothing to do.
   });
 } else {
   // Firebase unavailable (offline / no network on first load).
@@ -2997,6 +2986,7 @@ function handleSignIn() {
   msg.textContent = 'Signing in…'; msg.className = 'login-msg';
   try {
     await fbAuth.signInWithEmailAndPassword(email, password);
+    sessionStorage.setItem('_smSess', '1'); // mark as explicit login session
     // onAuthStateChanged fires and handles the rest
   } catch(e) {
     let errMsg = 'Sign-in failed. Check your email and password.';
