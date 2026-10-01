@@ -1014,7 +1014,7 @@ canvas{width:100%; display:block;}
 @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
 </style>
 
-<div class="login-gate" id="loginGate">
+<div class="login-gate" id="loginGate" style="display:none">
   <div id="loginLoader" style="position:absolute;inset:0;z-index:10;display:none;flex-direction:column;align-items:center;justify-content:center;background:var(--navy);background-image:radial-gradient(circle at 90% -20%,rgba(63,169,245,.35),transparent 60%),radial-gradient(circle at -10% 100%,rgba(15,174,107,.25),transparent 55%);padding:32px 24px;">
     <div style="font-size:52px;margin-bottom:16px;">💰</div>
     <div id="loginLoaderMsg" style="color:rgba(255,255,255,0.9);font-size:16px;font-weight:700;text-align:center;line-height:1.5;">Loading...</div>
@@ -2790,7 +2790,7 @@ canvas{width:100%; display:block;}
 ===================================================================== */
 
 /* ---------------- APP VERSION ---------------- */
-const APP_VERSION = '1.0.45'; // e.g. build 38 → tag apk-38
+const APP_VERSION = '1.0.46'; // e.g. build 38 → tag apk-38
 
 /* ---------------- FIREBASE SETUP ---------------- */
 const FIREBASE_CONFIG = {
@@ -2802,57 +2802,20 @@ const FIREBASE_CONFIG = {
   appId: "1:569152179406:web:f0de5c4e77783d5116149f"
 };
 
-// If the Firebase scripts could not load (e.g. offline on the website),
-// the app still runs fully local instead of crashing.
-const FIREBASE_READY = (typeof firebase !== 'undefined');
+// No login required — app opens directly without sign-in.
+// Data is stored locally on the device (localStorage).
+const FIREBASE_READY = false;
 let fbAuth = null, firestoreDB = null;
-if (FIREBASE_READY) {
-  firebase.initializeApp(FIREBASE_CONFIG);
-  fbAuth = firebase.auth();
-  firestoreDB = firebase.firestore();
 
-  // Auth state listener — runs once on load and whenever sign-in / sign-out happens.
-  // The loginGate starts VISIBLE so the login screen is always shown by default;
-  // this listener hides it only once Firebase confirms a signed-in user.
-  fbAuth.onAuthStateChanged(async function(user) {
-    // loginLoader is hidden by default — login form always shows instantly on app open.
-    // We only auto-proceed to the app if the user explicitly logged in THIS session.
-    const thisSession = sessionStorage.getItem('_smSess') === '1';
-    currentUser = user;
-    const gate         = document.getElementById('loginGate');
-    const loader       = document.getElementById('loginLoader');
-    const signedInAsEl = document.getElementById('signedInAs');
-
-    if (user && thisSession) {
-      // Valid active session — auto-proceed to the app
-      // Show brief signing-in overlay while loading cloud data
-      if (loader) loader.style.display = 'flex';
-      if (gate)   gate.classList.add('hidden');
-      if (signedInAsEl) signedInAsEl.textContent = 'Signed in as ' + (user.email || '');
-      const loaderMsg = document.getElementById('loginLoaderMsg');
-      const loaderSub = document.getElementById('loginLoaderSub');
-      if (loaderMsg) loaderMsg.textContent = 'Signing you in... ✅';
-      if (loaderSub) loaderSub.textContent = user.email || '';
-      const changed = await pullCloudData();
-      if (changed) { load(); renderAll(); }
-      setTimeout(checkForUpdate, 4000);
-      setTimeout(() => readBankSms(true), 3000);
-
-    } else if (user && !thisSession) {
-      // Cached Firebase user on cold start — sign out silently.
-      // Login form is already visible by default, nothing to show/hide.
-      await fbAuth.signOut();
-    }
-    // user === null: login form is already visible by default — nothing to do.
-  });
-} else {
-  // Firebase unavailable (offline / no network on first load).
-  // Keep the login gate VISIBLE — do NOT bypass login when offline.
-  // The login/signup buttons already show "No internet" errors, so the user
-  // knows they need connectivity. This prevents anyone from skipping login.
+// Hide login gate and launch app immediately
+(function() {
   const gate = document.getElementById('loginGate');
-  if (gate) gate.classList.remove('hidden'); // ensure gate stays visible
-}
+  if (gate) gate.style.display = 'none';
+  load();
+  renderAll();
+  setTimeout(checkForUpdate, 4000);
+  setTimeout(function() { try { readBankSms(true); } catch(e) {} }, 3000);
+})();
 
 const LOCAL_MTIME_KEY = 'spendmete_local_mtime';
 let currentUser = null;
