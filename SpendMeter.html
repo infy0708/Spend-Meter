@@ -2790,7 +2790,7 @@ canvas{width:100%; display:block;}
 ===================================================================== */
 
 /* ---------------- APP VERSION ---------------- */
-const APP_VERSION = '1.0.44'; // e.g. build 38 → tag apk-38
+const APP_VERSION = '1.0.45'; // e.g. build 38 → tag apk-38
 
 /* ---------------- FIREBASE SETUP ---------------- */
 const FIREBASE_CONFIG = {
@@ -2825,16 +2825,6 @@ if (FIREBASE_READY) {
 
     if (user && thisSession) {
       // Valid active session — auto-proceed to the app
-      if (!user.emailVerified) {
-        await fbAuth.signOut();
-        sessionStorage.removeItem('_smSess');
-        const msgEl = document.getElementById('loginMsg');
-        if (msgEl) {
-          msgEl.textContent = '📧 Please verify your email first — check your inbox and click the verification link, then sign in again.';
-          msgEl.className = 'login-msg';
-        }
-        return;
-      }
       // Show brief signing-in overlay while loading cloud data
       if (loader) loader.style.display = 'flex';
       if (gate)   gate.classList.add('hidden');
@@ -3012,12 +3002,9 @@ async function handleSignUp() {
   if (!FIREBASE_READY) { msg.textContent = 'No internet — connect and try again.'; msg.className = 'login-msg err'; return; }
   msg.textContent = 'Creating account…'; msg.className = 'login-msg';
   try {
-    const cred = await fbAuth.createUserWithEmailAndPassword(email, password);
-    // Send verification email (OTP link) to confirm email address
-    try { await cred.user.sendEmailVerification(); } catch(_) {}
-    msg.textContent = '✅ Account created! A verification email has been sent to ' + email + '. Please check your inbox and click the link to verify.';
-    msg.className = 'login-msg';
-    // onAuthStateChanged fires → checkAndShowOnboarding → shows onboarding for new user
+    await fbAuth.createUserWithEmailAndPassword(email, password);
+    sessionStorage.setItem('_smSess', '1'); // mark as explicit login — auto-proceed to app
+    // onAuthStateChanged fires → opens app immediately
   } catch(e) {
     let errMsg = 'Could not create account.';
     if (e.code === 'auth/email-already-in-use') errMsg = 'This email already has an account. Sign in instead.';
