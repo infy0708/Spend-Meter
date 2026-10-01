@@ -2790,7 +2790,7 @@ canvas{width:100%; display:block;}
 ===================================================================== */
 
 /* ---------------- APP VERSION ---------------- */
-const APP_VERSION = '1.0.42'; // e.g. build 38 → tag apk-38
+const APP_VERSION = '1.0.43'; // e.g. build 38 → tag apk-38
 
 /* ---------------- FIREBASE SETUP ---------------- */
 const FIREBASE_CONFIG = {
@@ -2820,7 +2820,15 @@ if (FIREBASE_READY) {
       window._smSessInit = true;
       if (!sessionStorage.getItem('_smSess')) {
         sessionStorage.setItem('_smSess', '1');
-        if (user) { await fbAuth.signOut(); return; }
+        if (user) {
+              // Hide splash immediately so user sees login form, not stuck "Loading…"
+              const loader = document.getElementById('loginLoader');
+              if (loader) loader.style.display = 'none';
+              const gate = document.getElementById('loginGate');
+              if (gate) gate.classList.remove('hidden');
+              await fbAuth.signOut();
+              return;
+            }
       }
     }
     currentUser = user;
