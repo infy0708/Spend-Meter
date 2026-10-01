@@ -2790,7 +2790,7 @@ canvas{width:100%; display:block;}
 ===================================================================== */
 
 /* ---------------- APP VERSION ---------------- */
-const APP_VERSION = '1.0.46'; // e.g. build 38 → tag apk-38
+const APP_VERSION = '1.0.47'; // e.g. build 38 → tag apk-38
 
 /* ---------------- FIREBASE SETUP ---------------- */
 const FIREBASE_CONFIG = {
@@ -2849,7 +2849,7 @@ function switchLoginTab(tab) {
   document.getElementById('tabSignUp').classList.toggle('active', !isSignIn);
 }
 
-async async function readBankSms(autoMode) {
+async function readBankSms(autoMode) {
   const badge  = document.getElementById('smsBadge');
   const status = document.getElementById('smsReadStatus');
   if (!window.Capacitor || !window.Capacitor.isNativePlatform()) {
