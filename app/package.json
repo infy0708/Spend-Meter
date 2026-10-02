@@ -6,7 +6,7 @@
     "@capacitor/android": "8.5.2",
     "@capacitor/cli": "8.5.2",
     "@capacitor/core": "8.5.2",
-    "@codetrix-studio/capacitor-google-auth": "3.4.0"
+    "@codetrix-studio/capacitor-google-auth": "3.3.6"
   },
   "devDependencies": {
     "@capacitor/assets": "3.0.5"
