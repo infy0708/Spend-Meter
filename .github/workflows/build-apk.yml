@@ -41,7 +41,7 @@ jobs:
           java-version: 21
       - name: Install packages
         if: steps.check.outputs.ready == 'true'
-        run: npm ci
+        run: npm install --legacy-peer-deps
       - name: Prepare web files
         if: steps.check.outputs.ready == 'true'
         run: |
