@@ -3,9 +3,14 @@
   "appName": "Spend Meter",
   "webDir": "www",
   "plugins": {
-    "FirebaseAuthentication": {
-      "skipNativeAuth": true,
-      "providers": []
+    "GoogleAuth": {
+      "scopes": [
+        "profile",
+        "email",
+        "https://www.googleapis.com/auth/drive.file"
+      ],
+      "serverClientId": "569152179406-ubojvvv8ktncdkbmh17fgo9ssa61ml51.apps.googleusercontent.com",
+      "forceCodeForRefreshToken": false
     }
   }
 }

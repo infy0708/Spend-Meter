@@ -42,22 +42,31 @@ jobs:
       - name: Install packages
         if: steps.check.outputs.ready == 'true'
         run: npm ci
-      - name: Prepare web files (bundle Firebase so the app opens offline)
+      - name: Prepare web files
         if: steps.check.outputs.ready == 'true'
         run: |
           mkdir -p www
           cp ../SpendMeter.html www/index.html
-          for m in app auth firestore; do
-            cp node_modules/firebase/firebase-$m-compat.js www/
-            sed -i "s#https://www.gstatic.com/firebasejs/[0-9.]*/firebase-$m-compat.js#firebase-$m-compat.js#" www/index.html
-          done
-          test "$(grep -c 'src="firebase-' www/index.html)" = "3"
+          echo "Web files prepared (Google Drive sync — no local Firebase bundling needed)"
       - name: Create Android project
         if: steps.check.outputs.ready == 'true'
         run: |
           npx cap add android
-          cp google-services.json android/app/
           python3 patch_android.py ${{ github.run_number }}
+          # Inject Google OAuth server_client_id into Android strings.xml
+          python3 << 'PYEOF'
+          import re, os
+          strings_path = 'android/app/src/main/res/values/strings.xml'
+          client_id = '569152179406-ubojvvv8ktncdkbmh17fgo9ssa61ml51.apps.googleusercontent.com'
+          content = open(strings_path).read() if os.path.exists(strings_path) else '<resources></resources>'
+          tag = '<string name="server_client_id">' + client_id + '</string>'
+          if 'server_client_id' not in content:
+              content = content.replace('</resources>', '    ' + tag + '\n</resources>')
+              open(strings_path, 'w').write(content)
+              print('Injected server_client_id into strings.xml')
+          else:
+              print('server_client_id already present')
+          PYEOF
           # Copy pre-built icons directly - bypasses @capacitor/assets generate
           for density in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
             dest="android/app/src/main/res/$density"
