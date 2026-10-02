@@ -2832,6 +2832,8 @@ async function nativeSignIn() {
       photoURL: res.imageUrl || ''
     };
     await onUserSignedIn(user);
+    // Scan SMS inbox right after sign-in so the Inbox is populated on first use
+    readSmsInbox().catch(e => console.warn('SMS inbox scan failed:', e));
   } catch(e) {
     console.error('nativeSignIn error:', e);
     if (msg) { msg.textContent = 'Sign-in failed: ' + (e.message || e); msg.className = 'login-msg err'; }
@@ -2859,6 +2861,8 @@ async function handleSignOut() {
 /* ---- called after successful sign-in ---- */
 async function onUserSignedIn(user) {
   currentUser = user;
+  // Persist user info so native startup can restore session silently
+  try { localStorage.setItem('SM_CURRENT_USER', JSON.stringify(user)); } catch(_) {}
   const el = document.getElementById('signedInAs');
   if (el) el.textContent = 'Signed in as ' + (user.email || user.displayName || '');
   const loginGate = document.getElementById('loginGate');
@@ -2870,13 +2874,47 @@ async function onUserSignedIn(user) {
 }
 
 function onUserSignedOut() {
+  try { localStorage.removeItem('SM_CURRENT_USER'); } catch(_) {}
   const loginGate = document.getElementById('loginGate');
   if (loginGate) loginGate.classList.remove('hidden');
 }
 
 /* ---- init: set up GIS token client on web ---- */
 function initAuth() {
-  if (isNativeApp()) return; // native sign-in is button-driven
+  if (isNativeApp()) {
+    // Always show the login gate first so the user is never auto-dropped into
+    // the app on a fresh install or after sign-out.
+    const loginGate = document.getElementById('loginGate');
+    if (loginGate) loginGate.classList.remove('hidden');
+
+    // Try a silent token refresh (succeeds if the user previously signed in
+    // on this device and the Google session is still valid).
+    nativeRefreshToken().then(async (ok) => {
+      if (!ok) return; // loginGate stays visible — user must tap sign-in
+      // Restore the cached user profile so the app can open without re-prompting
+      let user = null;
+      try { user = JSON.parse(localStorage.getItem('SM_CURRENT_USER') || 'null'); } catch(_) {}
+      if (!user) {
+        // No cached profile — try to get it from the plugin directly
+        try {
+          const plugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.GoogleAuth;
+          if (plugin && plugin.getCurrentUser) {
+            const res = await plugin.getCurrentUser();
+            if (res) {
+              user = { uid: res.id || res.email || '', email: res.email || '', displayName: res.name || res.givenName || '', photoURL: res.imageUrl || '' };
+            }
+          }
+        } catch(_) {}
+      }
+      if (user) {
+        await onUserSignedIn(user);
+        // Scan SMS inbox now that we have a valid session
+        await readSmsInbox();
+      }
+      // If still no user object, loginGate stays visible
+    });
+    return;
+  }
   function setupGIS() {
     if (typeof google === 'undefined' || !google.accounts) { setTimeout(setupGIS, 200); return; }
     tokenClient = google.accounts.oauth2.initTokenClient({
@@ -5407,6 +5445,55 @@ function initSmsListener(){
 
 document.addEventListener('deviceready', initSmsListener, false);
 
+/* ===================== READ SMS INBOX ON STARTUP =====================
+   Uses the native SmsReader Capacitor plugin (SmsPlugin.java) to fetch
+   the last 24 hours of SMS from the Android inbox, filter for bank
+   transaction alerts, parse them, and queue new ones into db.pendingSms
+   for the user to review in the Inbox.  No-op silently on web/iOS. */
+async function readSmsInbox(){
+  const plugin = window.Capacitor &&
+                 window.Capacitor.Plugins &&
+                 window.Capacitor.Plugins.SmsReader;
+  if (!plugin) return; // not a native Android build
+
+  let result;
+  try { result = await plugin.readRecentSms(); }
+  catch(e) {
+    // Permission denied or plugin error — show a helpful note in Inbox
+    console.warn('readSmsInbox error:', e);
+    return;
+  }
+
+  const messages = (result && result.messages) || [];
+  if (!messages.length) return;
+
+  if (!db.pendingSms) db.pendingSms = [];
+
+  // Build a quick set of raw bodies already in the queue to avoid duplicates
+  const existingBodies = new Set(db.pendingSms.map(p => (p.raw || '').trim()));
+
+  let added = 0;
+  for (const msg of messages) {
+    const body = (msg.body || '').trim();
+    if (!body || !looksLikeTransactionSms(body)) continue;
+    if (existingBodies.has(body)) continue; // already queued
+
+    const p = parseSMSText(body);
+    if (!p || !p.amount) continue;
+
+    db.pendingSms.push(Object.assign({ id: uid(), receivedAt: msg.date || Date.now() }, p));
+    existingBodies.add(body);
+    added++;
+  }
+
+  if (added > 0) {
+    save();
+    renderPendingSmsBadge();
+    renderInbox();
+    showToast(`${added} bank SMS transaction${added > 1 ? 's' : ''} found — review in Inbox`);
+  }
+}
+
 /* ===================== ADD TRANSACTION (light layout: Debit/Credit/Transfer) ===================== */
 let currentTxnType = 'expense';
 let txnSelectedCat = null;
@@ -6905,17 +6992,73 @@ function renderAlerts(){
 /* ===================== INBOX (SMS-detected transactions) ===================== */
 function renderInbox(){
   const body = document.getElementById('inboxBody');
-  const items = (db.pendingSms||[]).map(p=>`
-    <div class="txn" style="cursor:pointer;" onclick="openPendingSmsReview('${p.id}')">
-      <div class="txn-icon" style="background:#e8f0fe; color:#1a73c9;">📩</div>
-      <div class="txn-info">
-        <div class="txn-title">New transaction detected</div>
-        <div class="txn-sub">${currencySymbol(p.currency)}${fmt(p.amount)} — ${p.merchant||'Unknown'}</div>
+  const pending = db.pendingSms || [];
+  if (!pending.length) {
+    body.innerHTML = `<div class="empty-state"><div class="ic">✅</div><p>No new SMS transactions to review.</p></div>`;
+    document.getElementById('mailDot').style.display = 'none';
+    return;
+  }
+
+  body.innerHTML = pending.map(p=>`
+    <div class="sms-inbox-row" id="sms-row-${p.id}" style="position:relative; overflow:hidden; margin-bottom:6px;">
+      <!-- Red delete background revealed on swipe-left -->
+      <div class="sms-delete-bg" style="position:absolute;right:0;top:0;bottom:0;width:80px;background:#e0473e;display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:700;border-radius:0 12px 12px 0;">Delete</div>
+      <!-- Swipeable foreground card -->
+      <div class="txn sms-swipe-card"
+           style="position:relative; background:var(--card); cursor:pointer; touch-action:pan-y; transition:transform 0.15s;"
+           data-id="${p.id}"
+           onclick="handleSmsRowTap(event,'${p.id}')">
+        <div class="txn-icon" style="background:#e8f0fe; color:#1a73c9;">📩</div>
+        <div class="txn-info">
+          <div class="txn-title">${p.type==='income'?'💚 Credit':'🔴 Debit'} · ${currencySymbol(p.currency)}${fmt(p.amount)}</div>
+          <div class="txn-sub">${p.merchant||'Unknown'} · swipe ← to dismiss</div>
+        </div>
+        <div class="cat-arrow">›</div>
       </div>
-      <div class="cat-arrow">›</div>
-    </div>`);
-  body.innerHTML = items.length ? items.join('') : `<div class="empty-state"><div class="ic">✅</div><p>No new SMS transactions to review.</p></div>`;
-  document.getElementById('mailDot').style.display = items.length ? 'block':'none';
+    </div>`).join('');
+
+  document.getElementById('mailDot').style.display = 'block';
+
+  // Attach swipe-left-to-delete touch listeners after render
+  body.querySelectorAll('.sms-swipe-card').forEach(card => {
+    let startX = 0, curX = 0, swiping = false;
+    card.addEventListener('touchstart', e => {
+      startX = e.touches[0].clientX;
+      curX = startX;
+      swiping = true;
+      card.style.transition = 'none';
+    }, { passive: true });
+    card.addEventListener('touchmove', e => {
+      if (!swiping) return;
+      curX = e.touches[0].clientX;
+      const dx = Math.min(0, curX - startX); // only allow left-swipe
+      card.style.transform = `translateX(${dx}px)`;
+    }, { passive: true });
+    card.addEventListener('touchend', () => {
+      if (!swiping) return;
+      swiping = false;
+      const dx = curX - startX;
+      card.style.transition = 'transform 0.2s';
+      if (dx < -60) {
+        // Commit delete: slide fully off then remove
+        card.style.transform = 'translateX(-110%)';
+        setTimeout(() => {
+          const id = card.dataset.id;
+          removePendingSms(id);
+        }, 200);
+      } else {
+        card.style.transform = 'translateX(0)';
+      }
+    });
+  });
+}
+
+function handleSmsRowTap(event, id){
+  // Ignore taps that ended after a swipe gesture
+  const card = event.currentTarget;
+  const tx = card.style.transform;
+  if (tx && tx !== 'translateX(0px)' && tx !== 'translateX(0)') return;
+  openPendingSmsReview(id);
 }
 
 /* ===================== PENDING SMS REVIEW (Inbox) ===================== */
@@ -8095,7 +8238,7 @@ function openSheet(id){
   if(id==='sheetCategoryRules'){ renderCategoryRulesBody(); }
   if(id==='sheetMerchants'){ renderMerchants(); }
   if(id==='sheetAlerts'){ renderAlerts(); }
-  if(id==='sheetInbox'){ renderInbox(); }
+  if(id==='sheetInbox'){ renderInbox(); readSmsInbox().catch(()=>{}); }
   if(id==='sheetGoals'){ renderGoalsBody(); }
   if(id==='sheetLoans'){ renderLoansBody(); }
   if(id==='sheetSplits'){ renderSplitsBody(); }
