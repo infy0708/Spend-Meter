@@ -3257,7 +3257,8 @@ const DEFAULT_EXPENSE_CATEGORIES = [
   {id:'investment_etf', name:'ETF', icon:'🧺', color:'#1a9c73', parentId:'investment'},
   {id:'taxes', name:'Taxes', icon:'🏛️', color:'#6b7b8b'},
   {id:'misc', name:'Miscellaneous', icon:'🧩', color:'#3aa66b'},
-  {id:'other', name:'Other', icon:'📦', color:'#8b9aa8'}
+  {id:'other', name:'Other', icon:'📦', color:'#8b9aa8'},
+  {id:'uncategorized', name:'Uncategorized', icon:'❓', color:'#aab0b8'}
 ];
 const DEFAULT_INCOME_CATEGORIES = [
   {id:'salary', name:'Salary', icon:'💰', color:'#0fae6b'},
@@ -5182,6 +5183,39 @@ function parseStructuredBankSMS(raw){
 
   return {amount, currency, type, merchant, category, accountId: acc?acc.id:null, date, time, raw, willCreateAccount};
 }
+/** Auto-detect expense category from merchant name and raw SMS text.
+ *  Returns a category id string, or null if nothing matches (show as Uncategorized). */
+function guessCategoryFromSms(merchant, raw){
+  const m = (merchant + ' ' + raw).toLowerCase();
+  // Food & dining
+  if(/(restaurant|cafe|cafeteria|coffee|tea|burger|pizza|shawarma|maqha|مقهى|مطعم|bakery|pastry|sweets|juice|food|dining|kfc|mcdonalds|subway|starbucks|dominos|papa john|popeyes|hardees|chicken|grill|kitchen|eatery|سفرة|وجبة|وجبات|فطور|غداء|عشاء)/.test(m)) return 'food';
+  // Groceries & supermarket
+  if(/(lulu|carrefour|panda|danube|tamimi|bin dawood|hypermarket|supermarket|grocery|خضار|بقالة|سوبر ماركت|تسوق|al raya|othaim|farm stores|vegetables|fruits|market)/.test(m)) return 'grocery';
+  // Fuel / petrol
+  if(/(petrol|fuel|gas station|esso|shell|total|mobil|aramco|noc|salik|محطة|بنزين|وقود|diesel)/.test(m)) return 'fuel';
+  // Transport & car
+  if(/(uber|careem|taxi|cab|bus|metro|transport|parking|مواصلات|أجرة|باص|سيارة أجرة|car rental|parking fee|toll|مواقف|لوحة)/.test(m)) return 'transport';
+  // Shopping & retail
+  if(/(amazon|noon|souq|zara|h&m|ikea|max fashion|shoe|footwear|clothing|apparel|mall|store|retail|تسوق|بوتيك|ملابس|أحذية|متجر)/.test(m)) return 'shopping';
+  // Health & pharmacy
+  if(/(pharmacy|eczane|drug store|clinic|hospital|medical|doctor|dentist|optical|lab test|health|nahdi|النهدي|صيدلية|مستشفى|عيادة|طبيب|دواء|علاج)/.test(m)) return 'health';
+  // Entertainment
+  if(/(cinema|vox|muvi|movie|netflix|spotify|playstation|xbox|game|entertainment|fun|park|bowling|ترفيه|سينما|فيلم|لعبة)/.test(m)) return 'entertainment';
+  // Rent & housing
+  if(/(rent|lease|إيجار|property|housing|apartment|شقة|عقار)/.test(m)) return 'rent';
+  // Bills & utilities
+  if(/(stc|mobily|zain|etisalat|du |telecom|electric|water bill|utility|internet|wifi|phone bill|هاتف|كهرباء|ماء|إنترنت|اتصالات|اتصال|فاتورة|sadad|سداد)/.test(m)) return 'bills';
+  // Personal care
+  if(/(salon|barber|spa|hair|نظافة|حلاقة|صالون|beauty|مساج)/.test(m)) return 'personal';
+  // Subscriptions
+  if(/(subscription|apple|google|microsoft|adobe|شتراك|اشتراك|تجديد)/.test(m)) return 'subscription';
+  // Loans / EMI
+  if(/(emi|instalment|installment|loan|قرض|تقسيط|تمويل|مديونية)/.test(m)) return 'emi';
+  // Fund transfers between accounts — mark as transfer not expense
+  if(/(fund transfer|account transfer|تحويل)/.test(m)) return 'transfer';
+  return null; // truly unknown → will show as Uncategorized
+}
+
 function parseSMSText(raw){
   // Structured Label:Value SMS (the majority of real Saudi bank alerts,
   // English or Arabic) — tried first since it's the most reliable format.
@@ -5263,9 +5297,12 @@ function parseSMSText(raw){
     else if(genCardMatch){ cardLast4 = genCardMatch[1]; cardKind = 'card'; }
   }
 
-  let category = 'other';
+  // Category — try user-defined rules first, then smart keyword matching
+  let category = null;
   for(const [kw, cid] of Object.entries(db.rules)){ if(lower.includes(kw)){ category = cid; break; } }
-  if(type==='income' && category==='other') category='salary';
+  if(!category) category = guessCategoryFromSms(merchant||'', raw);
+  if(!category && type==='income') category = 'salary';
+  if(!category) category = 'uncategorized';
 
   // Date/time — PoS alerts embed the actual transaction timestamp
   // ("...on 2026-09-16 19:58:33."); use that instead of "today" whenever
@@ -5277,7 +5314,17 @@ function parseSMSText(raw){
 
   let acc = null, willCreateAccount = null;
   if(cardLast4){
-    acc = db.accounts.find(a => a.name.includes(cardLast4) && !a.archived);
+    // Match against account name OR the stored accountNumber field (last N digits)
+    acc = db.accounts.find(a => !a.archived && (
+      a.name.includes(cardLast4) ||
+      (a.accountNumber && a.accountNumber.toString().endsWith(cardLast4))
+    ));
+    if(!acc){
+      // Also try matching any suffix of the digits (some banks show last 3)
+      acc = db.accounts.find(a => !a.archived && (
+        a.name.match(/\d{3,6}/) && a.name.match(/\d{3,6}/)[0].endsWith(cardLast4.slice(-3))
+      ));
+    }
     if(!acc){
       willCreateAccount = { name: (cardKind==='card'?'Card ':'Bank ')+cardLast4, type: cardKind, currency, color: ACCOUNT_COLORS[Math.floor(Math.random()*ACCOUNT_COLORS.length)].id };
     }
@@ -7004,23 +7051,35 @@ function renderInbox(){
     return;
   }
 
-  body.innerHTML = pending.map(p=>`
-    <div class="sms-inbox-row" id="sms-row-${p.id}" style="position:relative; overflow:hidden; margin-bottom:6px;">
-      <!-- Red delete background revealed on swipe-left -->
+  body.innerHTML = pending.map(p=>{
+    const isCredit = p.type==='income';
+    const accName = p.accountId ? (db.accounts.find(a=>a.id===p.accountId)||{}).name || '' : (p.willCreateAccount ? p.willCreateAccount.name : '');
+    const catObj = catInfo(p.category);
+    const catLabel = catObj ? catObj.name : 'Uncategorized';
+    return `
+    <div class="sms-inbox-row" id="sms-row-${p.id}" style="position:relative; overflow:hidden; margin-bottom:8px;">
       <div class="sms-delete-bg" style="position:absolute;right:0;top:0;bottom:0;width:80px;background:#e0473e;display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:700;border-radius:0 12px 12px 0;">Delete</div>
-      <!-- Swipeable foreground card -->
-      <div class="txn sms-swipe-card"
-           style="position:relative; background:var(--card); cursor:pointer; touch-action:pan-y; transition:transform 0.15s;"
+      <div class="sms-swipe-card"
+           style="position:relative; background:var(--card); border-radius:12px; cursor:pointer; touch-action:pan-y; transition:transform 0.15s; display:flex; align-items:center; padding:12px 14px; gap:12px; box-shadow:0 1px 4px rgba(0,0,0,0.06);"
            data-id="${p.id}"
            onclick="handleSmsRowTap(event,'${p.id}')">
-        <div class="txn-icon" style="background:#e8f0fe; color:#1a73c9;">📩</div>
-        <div class="txn-info">
-          <div class="txn-title">${p.type==='income'?'💚 Credit':'🔴 Debit'} · ${currencySymbol(p.currency)}${fmt(p.amount)}</div>
-          <div class="txn-sub">${p.merchant||'Unknown'} · swipe ← to dismiss</div>
+        <!-- Icon -->
+        <div style="width:42px;height:42px;border-radius:12px;background:${isCredit?'#e6f7ef':'#fdecea'};display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">${isCredit?'💚':'🔴'}</div>
+        <!-- Info -->
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;">
+            <div style="font-weight:700;font-size:15px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.merchant||'Transaction'}</div>
+            <div style="font-weight:700;font-size:15px;color:${isCredit?'#0fae6b':'#e0473e'};white-space:nowrap;">${isCredit?'+':'−'}${currencySymbol(p.currency)}${fmt(p.amount)}</div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:3px;gap:6px;">
+            <div style="font-size:12px;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${accName||'Tap to review'}</div>
+            <div style="font-size:11px;color:var(--ink-soft);white-space:nowrap;flex-shrink:0;">${catLabel} · swipe ← dismiss</div>
+          </div>
         </div>
-        <div class="cat-arrow">›</div>
+        <div style="color:var(--ink-soft);font-size:16px;flex-shrink:0;">›</div>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   document.getElementById('mailDot').style.display = 'block';
 
