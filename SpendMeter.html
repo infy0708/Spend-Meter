@@ -2864,10 +2864,15 @@ async function onUserSignedIn(user) {
   if (el) el.textContent = 'Signed in as ' + (user.email || user.displayName || '');
   const loginGate = document.getElementById('loginGate');
   if (loginGate) loginGate.classList.add('hidden');
+  const hadLocalData = !!localStorage.getItem(STORE_KEY);
   const changed = await pullCloudData();
   if (changed) { try { loadDB(); renderAll(); } catch(_) {} }
-  // Always push on sign-in so local data is immediately backed up to Drive
-  pushCloudData().then(() => showToast('✅ Drive backup synced')).catch(e => console.warn('Initial push:', e));
+  // Push on sign-in only if we had local data before the pull (so we don't overwrite cloud with empty on reinstall)
+  if (hadLocalData) {
+    pushCloudData().then(() => showToast('✅ Drive backup synced')).catch(e => console.warn('Initial push:', e));
+  } else if (changed) {
+    showToast('✅ Data restored from Drive backup');
+  }
   setInterval(pushCloudData, 5 * 60 * 1000);
   await checkAndShowOnboarding(user);
 }
@@ -3156,17 +3161,21 @@ async function pullCloudData() {
     ).then(r => r.json());
 
     const localMtime  = Number(localStorage.getItem(LOCAL_MTIME_KEY) || 0);
-    const cloudMtime  = Number(cloudData.clientUpdatedAt || 0);
+    const cloudMtime  = Number(cloudData.clientUpdatedAt || cloudData.mtime || 0);
+    const hasLocalData = !!localStorage.getItem(STORE_KEY);
 
-    if (cloudData.spendmeter && cloudMtime > localMtime) {
+    // Pull if: (a) fresh install / no local data — always restore from cloud
+    //          (b) cloud is strictly newer than local
+    if (cloudData.spendmeter && (!hasLocalData || cloudMtime > localMtime)) {
       const incoming = typeof cloudData.spendmeter === 'string'
         ? cloudData.spendmeter : JSON.stringify(cloudData.spendmeter);
       const changed = incoming !== localStorage.getItem(STORE_KEY);
       localStorage.setItem(STORE_KEY, incoming);
-      localStorage.setItem(LOCAL_MTIME_KEY, String(cloudMtime));
+      localStorage.setItem(LOCAL_MTIME_KEY, String(cloudMtime || Date.now()));
+      console.log('SpendMeter: restored data from Drive backup');
       return changed;
     }
-    if (localStorage.getItem(STORE_KEY) && localMtime >= cloudMtime) {
+    if (hasLocalData && localMtime >= cloudMtime) {
       await pushCloudData();  // this device has newer (or the only) data
     }
   } catch(err) {
