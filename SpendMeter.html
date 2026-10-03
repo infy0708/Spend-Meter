@@ -2587,6 +2587,35 @@ canvas{width:100%; display:block;}
           </div>
         </div>
 
+        <!-- CLOUD BACKUP -->
+        <div class="set-section" id="setSectionBackup">
+          <div class="set-section-head" onclick="toggleSetSection('setSectionBackup')">
+            <div class="set-section-ic" style="background:#e8f4fd;">☁️</div>
+            <div><div class="set-section-title">Cloud Backup</div><div class="set-section-sub" id="setBackupSub">Google Drive sync</div></div>
+            <div class="set-section-chev">▾</div>
+          </div>
+          <div class="set-section-body">
+            <div id="backupStatusRow" style="display:flex;align-items:center;gap:8px;margin-bottom:14px;padding:10px 12px;background:var(--bg);border-radius:10px;">
+              <span id="backupStatusDot" style="width:9px;height:9px;border-radius:50%;background:#ccc;flex-shrink:0;"></span>
+              <span id="backupStatusText" style="font-size:12.5px;color:var(--ink-soft);">Checking…</span>
+            </div>
+            <div style="display:flex;gap:8px;margin-bottom:12px;">
+              <button class="btn secondary" style="flex:1;font-size:13px;" onclick="manualBackupNow()">⬆️ Backup Now</button>
+              <button class="btn secondary" style="flex:1;font-size:13px;" onclick="manualRestoreNow()">⬇️ Restore</button>
+            </div>
+            <div class="field" style="margin-bottom:0;">
+              <label>Auto-sync frequency</label>
+              <select id="setSyncFreq" onchange="saveSyncFrequency()">
+                <option value="1">Every 1 minute</option>
+                <option value="5" selected>Every 5 minutes</option>
+                <option value="15">Every 15 minutes</option>
+                <option value="30">Every 30 minutes</option>
+              </select>
+              <p class="small-note">Data is also backed up instantly after every transaction. Manual "Backup Now" pushes immediately; "Restore" pulls the latest Drive copy to this device.</p>
+            </div>
+          </div>
+        </div>
+
         <!-- SECURITY -->
         <div class="set-section" id="setSectionSecurity">
           <div class="set-section-head" onclick="toggleSetSection('setSectionSecurity')">
@@ -2740,7 +2769,7 @@ canvas{width:100%; display:block;}
 /* -------- GOOGLE DRIVE / OAUTH 2.0 SETUP -------- */
 // Web client ID from Google Cloud Console (project: spend-meter-1f407)
 const GOOGLE_CLIENT_ID = '569152179406-ubojvvv8ktncdkbmh17fgo9ssa61ml51.apps.googleusercontent.com';
-const DRIVE_SCOPES     = 'https://www.googleapis.com/auth/drive.file openid email profile';
+const DRIVE_SCOPES     = 'https://www.googleapis.com/auth/drive.appdata openid email profile';
 const DRIVE_FILE_NAME  = 'SpendMeter_data.json';
 
 let driveAccessToken = null;  // Google OAuth access token (1-hr lifetime)
@@ -2869,11 +2898,19 @@ async function onUserSignedIn(user) {
   if (changed) { try { loadDB(); renderAll(); } catch(_) {} }
   // Push on sign-in only if we had local data before the pull (so we don't overwrite cloud with empty on reinstall)
   if (hadLocalData) {
-    pushCloudData().then(() => showToast('✅ Drive backup synced')).catch(e => console.warn('Initial push:', e));
+    pushCloudData().then(ok => {
+      if (ok) { showToast('✅ Drive backup synced'); setBackupStatus('ok'); }
+      else setBackupStatus('error', 'Initial sync failed');
+    }).catch(e => { console.warn('Initial push:', e); setBackupStatus('error', 'Sync error'); });
   } else if (changed) {
     showToast('✅ Data restored from Drive backup');
+    setBackupStatus('ok');
+  } else {
+    setBackupStatus('idle');
   }
-  setInterval(pushCloudData, 5 * 60 * 1000);
+  // Start auto-sync at the saved frequency (default 5 min)
+  const savedFreq = Number(localStorage.getItem('SM_SYNC_FREQ') || 5);
+  restartSyncInterval(savedFreq);
   await checkAndShowOnboarding(user);
 }
 
@@ -2949,9 +2986,13 @@ function initAuth() {
 const OB_DONE_KEY = 'smOnboardingDone';
 
 async function checkAndShowOnboarding(user) {
-  // Only show once per account (stored locally by uid)
+  // Check loaded db object first (works even after Drive restore replaces localStorage)
+  if (db && db.profile && db.profile.name) {
+    localStorage.setItem(OB_DONE_KEY, user.uid);
+    return;
+  }
+  // Also check raw localStorage (fast path for already-seen users)
   if (localStorage.getItem(OB_DONE_KEY) === user.uid) return;
-  // Check if profile already embedded in the Drive data
   try {
     const raw = localStorage.getItem(STORE_KEY);
     if (raw) {
@@ -3129,9 +3170,10 @@ async function getDriveFileId() {
   if (driveFileId) return driveFileId;
   if (!await ensureToken()) return null;
   try {
-    const q = encodeURIComponent("name='" + DRIVE_FILE_NAME + "' and trashed=false");
+    // Use appDataFolder space — always accessible across reinstalls for the same Google account
+    const q = encodeURIComponent("name='" + DRIVE_FILE_NAME + "'");
     const res = await fetch(
-      'https://www.googleapis.com/drive/v3/files?q=' + q + '&fields=files(id,appProperties)',
+      'https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=' + q + '&fields=files(id)',
       { headers: { Authorization: 'Bearer ' + driveAccessToken } }
     ).then(r => r.json());
     if (res.files && res.files.length > 0) {
@@ -3199,7 +3241,10 @@ async function pushCloudData() {
       updatedAt: Date.now()
     });
 
-    const metadata = JSON.stringify({ name: DRIVE_FILE_NAME, mimeType: 'application/json' });
+    // On create, store in appDataFolder so file is always found across reinstalls
+    const metadata = JSON.stringify(fileId
+      ? { name: DRIVE_FILE_NAME, mimeType: 'application/json' }
+      : { name: DRIVE_FILE_NAME, mimeType: 'application/json', parents: ['appDataFolder'] });
     const boundary = 'sm_boundary_' + Date.now();
     const body = [
       '--' + boundary,
@@ -3227,8 +3272,15 @@ async function pushCloudData() {
     }).then(r => r.json());
 
     if (!fileId && res.id) driveFileId = res.id;
+    if (res.id || fileId) {
+      localStorage.setItem('SM_LAST_SYNC', Date.now().toString());
+      return true;
+    }
+    console.warn('pushCloudData: unexpected response', res);
+    return false;
   } catch(err) {
     console.error('pushCloudData:', err);
+    return false;
   }
 }
 
@@ -3238,6 +3290,65 @@ function queueCloudSync() {
   if (!currentUser) return;
   clearTimeout(cloudSyncTimer);
   cloudSyncTimer = setTimeout(pushCloudData, 2000);
+}
+
+// Manual backup / restore buttons in Settings
+async function manualBackupNow() {
+  if (!currentUser) { showToast('⚠️ Sign in first to backup'); return; }
+  setBackupStatus('syncing', 'Backing up…');
+  const ok = await pushCloudData();
+  if (ok) { showToast('✅ Backup complete'); setBackupStatus('ok'); }
+  else { showToast('❌ Backup failed — check your connection'); setBackupStatus('error', 'Backup failed'); }
+}
+async function manualRestoreNow() {
+  if (!currentUser) { showToast('⚠️ Sign in first to restore'); return; }
+  setBackupStatus('syncing', 'Restoring…');
+  // Force pull by temporarily clearing local mtime so cloud always wins
+  const savedMtime = localStorage.getItem(LOCAL_MTIME_KEY);
+  localStorage.removeItem(LOCAL_MTIME_KEY);
+  const changed = await pullCloudData();
+  if (!changed && savedMtime) localStorage.setItem(LOCAL_MTIME_KEY, savedMtime);
+  if (changed) {
+    loadDB(); renderAll();
+    showToast('✅ Data restored from Drive');
+    setBackupStatus('ok');
+  } else {
+    showToast('ℹ️ Already up to date');
+    setBackupStatus('ok');
+  }
+}
+
+function setBackupStatus(state, msg) {
+  const dot  = document.getElementById('backupStatusDot');
+  const text = document.getElementById('backupStatusText');
+  if (!dot || !text) return;
+  const lastSync = localStorage.getItem('SM_LAST_SYNC');
+  const timeStr  = lastSync ? 'Last sync: ' + new Date(Number(lastSync)).toLocaleTimeString() : 'Never synced';
+  if (state === 'ok') {
+    dot.style.background = '#22c55e';
+    text.textContent = '✓ Drive connected — ' + timeStr;
+  } else if (state === 'syncing') {
+    dot.style.background = '#f59e0b';
+    text.textContent = msg || 'Syncing…';
+  } else if (state === 'error') {
+    dot.style.background = '#ef4444';
+    text.textContent = (msg || 'Sync failed') + ' — ' + timeStr;
+  } else {
+    dot.style.background = '#ccc';
+    text.textContent = currentUser ? timeStr : 'Sign in to enable backup';
+  }
+}
+
+let syncIntervalTimer = null;
+function saveSyncFrequency() {
+  const mins = Number(document.getElementById('setSyncFreq').value) || 5;
+  localStorage.setItem('SM_SYNC_FREQ', String(mins));
+  restartSyncInterval(mins);
+  showToast('Sync frequency set to every ' + mins + ' min');
+}
+function restartSyncInterval(mins) {
+  if (syncIntervalTimer) clearInterval(syncIntervalTimer);
+  syncIntervalTimer = setInterval(pushCloudData, mins * 60 * 1000);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -8310,6 +8421,12 @@ function openSheet(id){
     document.getElementById('curEnableSearch').value = '';
     renderEnabledCurList();
     renderAppLockSettingsUI();
+    // Restore sync frequency dropdown
+    const savedFreq = localStorage.getItem('SM_SYNC_FREQ') || '5';
+    const freqSel = document.getElementById('setSyncFreq');
+    if (freqSel) { freqSel.value = savedFreq; if (!freqSel.value) freqSel.value = '5'; }
+    // Refresh backup status
+    setBackupStatus(currentUser ? 'ok' : 'idle');
     // Only "Profile" starts open — the rest are collapsed until tapped, so
     // the page reads as a short list of sections instead of one long form.
     document.querySelectorAll('#ov-sheetSettings .set-section').forEach(el=>el.classList.toggle('open', el.id==='setSectionProfile'));

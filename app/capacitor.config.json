@@ -7,7 +7,7 @@
       "scopes": [
         "profile",
         "email",
-        "https://www.googleapis.com/auth/drive.file"
+        "https://www.googleapis.com/auth/drive.appdata"
       ],
       "serverClientId": "569152179406-ubojvvv8ktncdkbmh17fgo9ssa61ml51.apps.googleusercontent.com",
       "forceCodeForRefreshToken": false
