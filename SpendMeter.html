@@ -2149,7 +2149,7 @@ canvas{width:100%; display:block;}
   <!-- ===================== SHEET: Inbox (SMS-detected transactions) ===================== -->
   <div class="overlay" id="ov-sheetInbox">
     <div class="sheet"><div class="handle"></div>
-      <div class="sheet-head"><h3>✉️ Inbox</h3><div class="sheet-close" onclick="closeSheet('sheetInbox')">✕</div></div>
+      <div class="sheet-head"><h3>✉️ Inbox</h3><button onclick="readSmsInbox().then(()=>showToast('SMS scan complete'))" style="font-size:13px;padding:4px 10px;border-radius:8px;border:1px solid #aaa;background:var(--card-bg,#fff);cursor:pointer;">🔍 Scan SMS</button><div class="sheet-close" onclick="closeSheet('sheetInbox')">✕</div></div>
       <div class="sheet-body" id="inboxBody"></div>
     </div>
   </div>
@@ -5376,10 +5376,13 @@ function learnRule(merchant, category){
 // only messages that look like an actual bank/payment transaction alert.
 function looksLikeTransactionSms(text){
   const lower = text.toLowerCase();
-  const hasMoneyWord = /(debited|credited|spent|paid|purchase|withdraw|deducted|received|deposit|refund|cashback|salary|transfer|instalment|installment)/i.test(lower);
-  const hasArabicMoneyWord = /(شراء|سحب|إيداع|تحويل|استرداد)/.test(text);
-  const hasAmountShape = /(sar|sr|inr|rs\.?|₹)\s?[\d,]+|\b[\d,]+\.\d{2}\b/i.test(lower);
-  const looksLikeOtp = /\botp\b|verification code|one[- ]time password|رمز التحقق/i.test(lower);
+  // English bank/transaction keywords (broader — includes "transaction", "card", "account")
+  const hasMoneyWord = /(debited|credited|spent|paid|purchase|withdraw|deducted|received|deposit|refund|cashback|salary|transfer|instalment|installment|transaction|card|account|payment|charged|used at|pos |atm |balance)/i.test(lower);
+  // Arabic bank keywords (Saudi banks: Al Rajhi, SNB, Riyad, SABB, BSF, etc.)
+  const hasArabicMoneyWord = /(شراء|سحب|إيداع|تحويل|استرداد|بطاقة|رصيد|حساب|معاملة|دفع|خصم|إضافة|سداد)/.test(text);
+  // Amount pattern: SAR/SR/INR/number or plain decimal
+  const hasAmountShape = /(sar|sr\.?|inr|rs\.?|₹|aed|bhd|kwd|qar|omr)\s?[\d,]+|\b[\d,]+\.\d{2}\b/i.test(lower);
+  const looksLikeOtp = /\botp\b|verification code|one[- ]time password|رمز التحقق|pin\b/i.test(lower);
   return (hasMoneyWord || hasArabicMoneyWord) && hasAmountShape && !looksLikeOtp;
 }
 
@@ -5456,13 +5459,18 @@ async function readSmsInbox(){
   let result;
   try { result = await plugin.readRecentSms(); }
   catch(e) {
-    // Permission denied or plugin error — show a helpful note in Inbox
     console.warn('readSmsInbox error:', e);
+    const msg = (e && (e.message || e.toString())) || '';
+    if (/denied|permission/i.test(msg)) {
+      showToast('SMS permission denied — grant it in Android Settings › Apps › SpendMeter › Permissions');
+    } else {
+      showToast('Could not read SMS: ' + msg);
+    }
     return;
   }
 
   const messages = (result && result.messages) || [];
-  if (!messages.length) return;
+  if (!messages.length) { showToast('No bank SMS found in the last 30 days'); return; }
 
   if (!db.pendingSms) db.pendingSms = [];
 

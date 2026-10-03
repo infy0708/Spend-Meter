@@ -56,7 +56,7 @@ public class SmsPlugin extends Plugin {
     private void doReadSms(PluginCall call) {
         try {
             // Last 24 hours
-            long since = System.currentTimeMillis() - (24L * 60 * 60 * 1000);
+            long since = System.currentTimeMillis() - (30L * 24L * 60 * 60 * 1000); // last 30 days
             ContentResolver cr  = getContext().getContentResolver();
             Uri              uri = Uri.parse("content://sms/inbox");
 
