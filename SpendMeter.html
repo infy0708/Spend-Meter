@@ -2651,6 +2651,9 @@ canvas{width:100%; display:block;}
           </div>
           <div class="set-section-body">
             <button class="btn secondary" onclick="exportData()">⬇️ Export Backup (JSON)</button>
+            <div style="height:8px;"></div>
+            <button class="btn secondary" onclick="importDataTrigger()">⬆️ Import Backup (JSON)</button>
+            <input type="file" id="importFileInput" accept=".json,application/json" style="display:none;" onchange="importDataFromFile(event)">
             <div style="height:10px;"></div>
             <button class="btn secondary" style="color:var(--red); border-color:#f3c9c6;" onclick="confirmReset()">🗑️ Reset All Data</button>
             <p class="small-note" style="margin-top:14px; margin-bottom:0;">Spend Meter stores everything locally on this device. Nothing is uploaded to any server.</p>
@@ -2894,15 +2897,16 @@ async function onUserSignedIn(user) {
   const loginGate = document.getElementById('loginGate');
   if (loginGate) loginGate.classList.add('hidden');
   const hadLocalData = !!localStorage.getItem(STORE_KEY);
-  const changed = await pullCloudData();
-  if (changed) { try { loadDB(); renderAll(); } catch(_) {} }
+  const pullResult = await pullCloudData();
+  // pullResult: true = new data loaded, 'fetched' = same data written, false = nothing
+  if (pullResult) { try { loadDB(); renderAll(); } catch(_) {} }
   // Push on sign-in only if we had local data before the pull (so we don't overwrite cloud with empty on reinstall)
   if (hadLocalData) {
     pushCloudData().then(ok => {
       if (ok) { showToast('✅ Drive backup synced'); setBackupStatus('ok'); }
       else setBackupStatus('error', 'Initial sync failed');
     }).catch(e => { console.warn('Initial push:', e); setBackupStatus('error', 'Sync error'); });
-  } else if (changed) {
+  } else if (pullResult) {
     showToast('✅ Data restored from Drive backup');
     setBackupStatus('ok');
   } else {
@@ -3226,7 +3230,8 @@ async function pullCloudData() {
       localStorage.setItem(STORE_KEY, incoming);
       localStorage.setItem(LOCAL_MTIME_KEY, String(cloudMtime || Date.now()));
       console.log('SpendMeter: restored data from Drive backup');
-      return changed;
+      // Return 'fetched' to signal data was written (even if content identical)
+      return changed ? true : 'fetched';
     }
     if (hasLocalData && localMtime >= cloudMtime) {
       await pushCloudData();  // this device has newer (or the only) data
@@ -3345,15 +3350,22 @@ async function manualRestoreNow() {
   // Force pull by temporarily clearing local mtime so cloud always wins
   const savedMtime = localStorage.getItem(LOCAL_MTIME_KEY);
   localStorage.removeItem(LOCAL_MTIME_KEY);
-  const changed = await pullCloudData();
-  if (!changed && savedMtime) localStorage.setItem(LOCAL_MTIME_KEY, savedMtime);
-  if (changed) {
-    loadDB(); renderAll();
-    showToast('✅ Data restored from Drive');
+  const result = await pullCloudData();
+  if (!result && savedMtime) localStorage.setItem(LOCAL_MTIME_KEY, savedMtime);
+  if (result) {
+    // Always reload UI after a restore — data may be correct in storage but stale on screen
+    try { loadDB(); } catch(e) { console.error('loadDB after restore:', e); }
+    try { renderAll(); } catch(e) { console.error('renderAll after restore:', e); }
+    if (result === true) {
+      showToast('✅ Data restored from Drive');
+    } else {
+      showToast('✅ Drive data loaded');
+    }
     setBackupStatus('ok');
   } else {
-    showToast('ℹ️ Already up to date');
-    setBackupStatus('ok');
+    // No cloud backup found — let user know
+    showToast('ℹ️ No backup found on Drive');
+    setBackupStatus('idle');
   }
 }
 
@@ -7996,6 +8008,44 @@ function exportData(){
   const a = document.createElement('a'); a.href = url; a.download = 'spendmete_backup_'+todayStr()+'.json';
   document.body.appendChild(a); a.click(); a.remove();
   showToast('Backup downloaded ✓');
+}
+function importDataTrigger(){
+  document.getElementById('importFileInput').value = '';
+  document.getElementById('importFileInput').click();
+}
+function importDataFromFile(evt){
+  const file = evt.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e){
+    try {
+      const parsed = JSON.parse(e.target.result);
+      // Accept both raw db object and the Drive backup envelope {spendmeter:{...}}
+      const data = parsed.spendmeter ? parsed.spendmeter : parsed;
+      if (!data.transactions && !data.accounts && !data.categories) {
+        showToast('❌ Invalid backup file'); return;
+      }
+      showConfirm({
+        title: 'Import backup?',
+        body: 'This will replace ALL current data with the contents of the imported file. This cannot be undone.',
+        icon: '⬆️',
+        confirmLabel: 'Import & Replace',
+        onConfirm: () => {
+          localStorage.setItem(STORE_KEY, JSON.stringify(data));
+          localStorage.setItem(LOCAL_MTIME_KEY, String(Date.now()));
+          loadDB(); renderAll();
+          showToast('✅ Data imported successfully');
+          // Sync to Drive if signed in
+          if (currentUser && driveAccessToken) {
+            pushCloudData().then(ok => { if (ok) showToast('✅ Imported data backed up to Drive'); });
+          }
+        }
+      });
+    } catch(err) {
+      showToast('❌ Could not read file: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
 }
 function confirmReset(){
   showConfirm({
