@@ -2912,6 +2912,10 @@ async function onUserSignedIn(user) {
   const savedFreq = Number(localStorage.getItem('SM_SYNC_FREQ') || 5);
   restartSyncInterval(savedFreq);
   await checkAndShowOnboarding(user);
+  // If a previous session flagged a permission error, show reauth banner
+  if (localStorage.getItem('SM_NEEDS_REAUTH') === '1') {
+    setTimeout(showReauthBanner, 1500);
+  }
 }
 
 function onUserSignedOut() {
@@ -3172,10 +3176,17 @@ async function getDriveFileId() {
   try {
     // Use appDataFolder space — always accessible across reinstalls for the same Google account
     const q = encodeURIComponent("name='" + DRIVE_FILE_NAME + "'");
-    const res = await fetch(
+    const resp = await fetch(
       'https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=' + q + '&fields=files(id)',
       { headers: { Authorization: 'Bearer ' + driveAccessToken } }
-    ).then(r => r.json());
+    );
+    if (resp.status === 401 || resp.status === 403) {
+      console.warn('getDriveFileId: auth error', resp.status);
+      localStorage.setItem('SM_NEEDS_REAUTH', '1');
+      showReauthBanner();
+      return null;
+    }
+    const res = await resp.json();
     if (res.files && res.files.length > 0) {
       driveFileId = res.files[0].id;
       return driveFileId;
@@ -3227,10 +3238,10 @@ async function pullCloudData() {
 }
 
 async function pushCloudData() {
-  if (!currentUser || !driveAccessToken) return;
-  if (!await ensureToken()) return;
+  if (!currentUser || !driveAccessToken) return false;
+  if (!await ensureToken()) return false;
   const raw = localStorage.getItem(STORE_KEY);
-  if (!raw) return;
+  if (!raw) return false;
   try {
     let mtime = Number(localStorage.getItem(LOCAL_MTIME_KEY) || 0);
     if (!mtime) { mtime = Date.now(); localStorage.setItem(LOCAL_MTIME_KEY, String(mtime)); }
@@ -3241,10 +3252,12 @@ async function pushCloudData() {
       updatedAt: Date.now()
     });
 
-    // On create, store in appDataFolder so file is always found across reinstalls
-    const metadata = JSON.stringify(fileId
+    // Get file ID first, THEN build metadata (order matters — fileId used in metadata)
+    const existingId = await getDriveFileId();
+    const metadata = JSON.stringify(existingId
       ? { name: DRIVE_FILE_NAME, mimeType: 'application/json' }
       : { name: DRIVE_FILE_NAME, mimeType: 'application/json', parents: ['appDataFolder'] });
+
     const boundary = 'sm_boundary_' + Date.now();
     const body = [
       '--' + boundary,
@@ -3256,24 +3269,33 @@ async function pushCloudData() {
       '--' + boundary + '--'
     ].join('\r\n');
 
-    const fileId = await getDriveFileId();
-    const method  = fileId ? 'PATCH' : 'POST';
-    const url     = fileId
-      ? 'https://www.googleapis.com/upload/drive/v3/files/' + fileId + '?uploadType=multipart'
+    const method = existingId ? 'PATCH' : 'POST';
+    const url    = existingId
+      ? 'https://www.googleapis.com/upload/drive/v3/files/' + existingId + '?uploadType=multipart'
       : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
 
-    const res = await fetch(url, {
+    const resp = await fetch(url, {
       method,
       headers: {
         Authorization: 'Bearer ' + driveAccessToken,
         'Content-Type': 'multipart/related; boundary=' + boundary
       },
       body
-    }).then(r => r.json());
+    });
 
-    if (!fileId && res.id) driveFileId = res.id;
-    if (res.id || fileId) {
+    // Detect auth / scope errors
+    if (resp.status === 401 || resp.status === 403) {
+      console.warn('pushCloudData: auth error', resp.status);
+      localStorage.setItem('SM_NEEDS_REAUTH', '1');
+      showReauthBanner();
+      return false;
+    }
+
+    const res = await resp.json();
+    if (!existingId && res.id) driveFileId = res.id;
+    if (res.id || existingId) {
       localStorage.setItem('SM_LAST_SYNC', Date.now().toString());
+      localStorage.removeItem('SM_NEEDS_REAUTH');
       return true;
     }
     console.warn('pushCloudData: unexpected response', res);
@@ -3282,6 +3304,23 @@ async function pushCloudData() {
     console.error('pushCloudData:', err);
     return false;
   }
+}
+
+// Show a persistent banner asking user to re-authorize Google Drive
+function showReauthBanner() {
+  if (document.getElementById('reauthBanner')) return; // already shown
+  const banner = document.createElement('div');
+  banner.id = 'reauthBanner';
+  banner.style.cssText = 'position:fixed;bottom:80px;left:12px;right:12px;z-index:9999;background:#1a1a2e;color:#fff;border-radius:14px;padding:14px 16px;box-shadow:0 4px 20px rgba(0,0,0,0.4);display:flex;align-items:center;gap:12px;';
+  banner.innerHTML = `
+    <div style="font-size:22px;">🔑</div>
+    <div style="flex:1;">
+      <div style="font-weight:700;font-size:13.5px;margin-bottom:2px;">Drive permission needed</div>
+      <div style="font-size:12px;color:rgba(255,255,255,0.65);">Sign out &amp; back in to enable backup</div>
+    </div>
+    <button onclick="handleSignOut()" style="background:#3b82f6;color:#fff;border:none;border-radius:9px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;">Re-authorize</button>
+    <button onclick="this.parentElement.remove()" style="background:none;border:none;color:rgba(255,255,255,0.4);font-size:18px;cursor:pointer;padding:0 2px;">✕</button>`;
+  document.body.appendChild(banner);
 }
 
 // Called after every local save: debounced push to Drive.
@@ -3324,7 +3363,21 @@ function setBackupStatus(state, msg) {
   if (!dot || !text) return;
   const lastSync = localStorage.getItem('SM_LAST_SYNC');
   const timeStr  = lastSync ? 'Last sync: ' + new Date(Number(lastSync)).toLocaleTimeString() : 'Never synced';
-  if (state === 'ok') {
+  const needsReauth = localStorage.getItem('SM_NEEDS_REAUTH') === '1';
+  if (needsReauth) {
+    dot.style.background = '#ef4444';
+    text.innerHTML = '⚠️ Permission needed — tap <b>Re-authorize</b> below or sign out and back in';
+    // Add inline re-authorize button
+    const sub = document.getElementById('backupStatusRow');
+    if (sub && !sub.querySelector('.reauth-btn')) {
+      const btn = document.createElement('button');
+      btn.className = 'btn secondary reauth-btn';
+      btn.textContent = '🔑 Re-authorize Google Drive';
+      btn.style.cssText = 'width:100%;margin-top:10px;font-size:13px;';
+      btn.onclick = () => handleSignOut();
+      sub.parentNode.insertBefore(btn, sub.nextSibling);
+    }
+  } else if (state === 'ok') {
     dot.style.background = '#22c55e';
     text.textContent = '✓ Drive connected — ' + timeStr;
   } else if (state === 'syncing') {
