@@ -8603,6 +8603,28 @@ document.addEventListener('backbutton', function(e){
   }
   // else: let the default Cordova behavior (minimize/exit) happen.
 }, false);
+// Flush pending cloud sync when app goes to background or page hides
+// This ensures balance updates and other saves aren't lost if Android kills the app
+// before the 2-second debounce timer fires.
+(function(){
+  function flushSync(){
+    if(cloudSyncTimer){
+      clearTimeout(cloudSyncTimer);
+      cloudSyncTimer = null;
+      pushCloudData().catch(function(){});
+    }
+  }
+  document.addEventListener('visibilitychange', function(){
+    if(document.visibilityState === 'hidden') flushSync();
+  });
+  window.addEventListener('pagehide', flushSync);
+  if(isNativeApp() && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App){
+    window.Capacitor.Plugins.App.addListener('appStateChange', function(state){
+      if(!state.isActive) flushSync();
+    });
+  }
+})();
+
 // Capacitor hardware back button (Android) — fires when app is wrapped in Capacitor
 if(isNativeApp() && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App){
   window.Capacitor.Plugins.App.addListener('backButton', function({ canGoBack }){
