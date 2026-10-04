@@ -3576,7 +3576,10 @@ function load(){
   if(!db.loans) db.loans = [];
   if(!db.splits) db.splits = [];
   if(!db.settings.userName) db.settings.userName = db.settings.userName || '';
-  save();
+  // Only persist if we already had data — never write defaults to localStorage
+  // before sign-in, otherwise onUserSignedIn sees hadLocalData=true and pushes
+  // empty default data to Firestore, overwriting the real cloud backup.
+  if(localStorage.getItem(STORE_KEY)) save();
 }
 function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(db)); queueCloudSync(); }
 
