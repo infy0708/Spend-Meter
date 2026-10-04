@@ -2916,7 +2916,16 @@ async function onUserSignedIn(user) {
 
   const pullResult = await pullCloudData();
   console.log('onUserSignedIn: pullResult =', pullResult, 'hadLocalData =', hadLocalData);
-  if (pullResult) { try { load(); renderAll(); } catch(e) { console.error('restore load:', e); } }
+  if (pullResult) {
+    // After a cloud restore, reload db from localStorage WITHOUT calling save()/queueCloudSync.
+    // Calling load() here would call save() which queues a push of the stale in-memory db,
+    // overwriting the data we just restored. Parse directly instead.
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (raw) { try { db = JSON.parse(raw); } catch(_) {} }
+      renderAll();
+    } catch(e) { console.error('restore render:', e); }
+  }
   if (hadLocalData) {
     pushCloudData().then(ok => {
       if (ok) { showToast('✅ Cloud backup synced'); setBackupStatus('ok'); }
