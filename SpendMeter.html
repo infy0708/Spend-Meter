@@ -2603,7 +2603,7 @@ canvas{width:100%; display:block;}
               <button class="btn secondary" style="flex:1;font-size:13px;" onclick="manualBackupNow()">⬆️ Backup Now</button>
               <button class="btn secondary" style="flex:1;font-size:13px;" onclick="manualRestoreNow()">⬇️ Restore</button>
             </div>
-            <div class="field" style="margin-bottom:0;">
+            <div class="field" style="margin-bottom:8px;">
               <label>Auto-sync frequency</label>
               <select id="setSyncFreq" onchange="saveSyncFrequency()">
                 <option value="1">Every 1 minute</option>
@@ -2613,6 +2613,8 @@ canvas{width:100%; display:block;}
               </select>
               <p class="small-note">Data is also backed up instantly after every transaction. Manual "Backup Now" pushes immediately; "Restore" pulls the latest Drive copy to this device.</p>
             </div>
+            <button class="btn secondary" style="width:100%;font-size:12px;margin-top:4px;" onclick="diagnoseDriveSync()">🔍 Diagnose Sync Issue</button>
+            <div id="syncDiagLog" style="display:none;margin-top:10px;padding:10px;background:var(--bg);border-radius:8px;font-size:11px;font-family:monospace;color:var(--ink-soft);max-height:200px;overflow-y:auto;white-space:pre-wrap;"></div>
           </div>
         </div>
 
@@ -2897,7 +2899,29 @@ async function onUserSignedIn(user) {
   const loginGate = document.getElementById('loginGate');
   if (loginGate) loginGate.classList.add('hidden');
   const hadLocalData = !!localStorage.getItem(STORE_KEY);
+
+  // --- Scope check: token must include drive.appdata before we attempt any Drive operation ---
+  const scopeOk = await verifyAndHandleScopeIssue();
+  if (!scopeOk) {
+    // Token lacks drive.appdata scope — ask user to sign out and sign back in
+    console.warn('onUserSignedIn: drive.appdata scope missing, showing reauth banner');
+    setBackupStatus('error', 'Re-auth needed');
+    setTimeout(showReauthBanner, 800);
+    // Start auto-sync interval even though we can't sync now
+    const savedFreq = Number(localStorage.getItem('SM_SYNC_FREQ') || 5);
+    restartSyncInterval(savedFreq);
+    await checkAndShowOnboarding(user);
+    return;
+  }
+
+  // Show a progress hint when the user has no local data (fresh install / reinstall)
+  if (!hadLocalData) {
+    showToast('☁️ Looking for your Drive backup…');
+    setBackupStatus('syncing', 'Restoring…');
+  }
+
   const pullResult = await pullCloudData();
+  console.log('onUserSignedIn: pullResult =', pullResult, 'hadLocalData =', hadLocalData);
   // pullResult: true = new data loaded, 'fetched' = same data written, false = nothing
   if (pullResult) { try { load(); renderAll(); } catch(e) { console.error('restore load:', e); } }
   // Push on sign-in only if we had local data before the pull (so we don't overwrite cloud with empty on reinstall)
@@ -2910,6 +2934,7 @@ async function onUserSignedIn(user) {
     showToast('✅ Data restored from Drive backup');
     setBackupStatus('ok');
   } else {
+    showToast('ℹ️ No backup found — starting fresh');
     setBackupStatus('idle');
   }
   // Start auto-sync at the saved frequency (default 5 min)
@@ -3173,6 +3198,129 @@ function parseBankSms(sms){
 }
 
 /* ====== GOOGLE DRIVE SYNC ====== */
+
+// Returns the scopes granted to the current token, or '' on failure
+async function getTokenScopes() {
+  if (!driveAccessToken) return '';
+  try {
+    const resp = await fetch(
+      'https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=' + encodeURIComponent(driveAccessToken)
+    );
+    if (!resp.ok) return '';
+    const data = await resp.json();
+    return data.scope || '';
+  } catch(e) { return ''; }
+}
+
+// Full sync diagnostic — called from the Diagnose button in Settings
+async function diagnoseDriveSync() {
+  const box = document.getElementById('syncDiagLog');
+  if (!box) return;
+  box.style.display = 'block';
+  box.textContent = '';
+  function log(msg) { box.textContent += '[' + new Date().toLocaleTimeString() + '] ' + msg + '\n'; box.scrollTop = box.scrollHeight; }
+
+  log('=== Drive Sync Diagnostic ===');
+  log('Signed in: ' + (currentUser ? currentUser.email : 'NO'));
+  log('Access token: ' + (driveAccessToken ? driveAccessToken.substring(0,20) + '…' : 'NONE'));
+
+  if (!driveAccessToken) { log('ERROR: No access token. Please sign in first.'); return; }
+
+  // 1. Check token scopes
+  log('Checking token scopes…');
+  const scopes = await getTokenScopes();
+  log('Scopes: ' + (scopes || '(empty/error)'));
+  const hasDriveScope = scopes.includes('drive.appdata');
+  log('Has drive.appdata: ' + (hasDriveScope ? '✅ YES' : '❌ NO — this is the problem!'));
+
+  if (!hasDriveScope) {
+    log('FIX: Sign out and sign in again to grant Drive access.');
+    log('In Settings, scroll down and tap Sign Out, then sign back in.');
+    localStorage.setItem('SM_NEEDS_REAUTH', '1');
+    showReauthBanner();
+    return;
+  }
+
+  // 2. Search appDataFolder
+  log('Searching appDataFolder for backup file…');
+  try {
+    const q = encodeURIComponent("name='" + DRIVE_FILE_NAME + "'");
+    const resp = await fetch(
+      'https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=' + q + '&fields=files(id,name,modifiedTime,size)',
+      { headers: { Authorization: 'Bearer ' + driveAccessToken } }
+    );
+    log('Search response: HTTP ' + resp.status);
+    if (resp.status === 401 || resp.status === 403) {
+      log('ERROR: Auth error — token may be expired. Sign out and back in.');
+      return;
+    }
+    const data = await resp.json();
+    const files = data.files || [];
+    log('Files found: ' + files.length);
+    if (files.length > 0) {
+      const f = files[0];
+      log('File: ' + f.name + ' (id=' + f.id + ')');
+      log('Modified: ' + (f.modifiedTime || 'unknown'));
+      log('Size: ' + (f.size || 'unknown') + ' bytes');
+
+      // 3. Fetch the file content to verify it has data
+      log('Reading backup content…');
+      const contentResp = await fetch(
+        'https://www.googleapis.com/drive/v3/files/' + f.id + '?alt=media',
+        { headers: { Authorization: 'Bearer ' + driveAccessToken } }
+      );
+      const content = await contentResp.json();
+      const hasData = content && content.spendmeter;
+      log('spendmeter field: ' + (hasData ? '✅ present' : '❌ MISSING'));
+      if (hasData) {
+        const txnCount = hasData.transactions ? hasData.transactions.length : 'n/a';
+        log('Transactions in backup: ' + txnCount);
+        log('Backup mtime: ' + (content.clientUpdatedAt || 0));
+        log('Local mtime:  ' + (localStorage.getItem(LOCAL_MTIME_KEY) || '0'));
+        log('Local data:   ' + (localStorage.getItem(STORE_KEY) ? '✅ present' : '❌ EMPTY (reinstall?)'));
+
+        // 4. Try manual restore
+        log('Attempting restore now…');
+        const prevMtime = localStorage.getItem(LOCAL_MTIME_KEY);
+        localStorage.removeItem(LOCAL_MTIME_KEY);
+        driveFileId = null; // reset cache
+        const result = await pullCloudData();
+        if (!result && prevMtime) localStorage.setItem(LOCAL_MTIME_KEY, prevMtime);
+        log('pullCloudData result: ' + result);
+        if (result) {
+          try { load(); renderAll(); } catch(e) { log('load/render error: ' + e); }
+          log('✅ Data restored and displayed!');
+          showToast('✅ Data restored from Drive');
+          setBackupStatus('ok');
+        } else {
+          log('❌ pullCloudData returned false — see above for clues');
+        }
+      }
+    } else {
+      log('No backup file found in appDataFolder.');
+      log('This can mean:');
+      log('  1. Backup was never run with the current account.');
+      log('  2. Backup was created before v1.0.57 (in regular Drive, not appDataFolder).');
+      log('Suggestion: Go back to your old device/install, open Settings → Data,');
+      log('tap "Export Backup (JSON)", then import the file here.');
+    }
+  } catch(e) {
+    log('ERROR: ' + e.message);
+  }
+  log('=== Diagnostic complete ===');
+}
+
+// Verify token has drive.appdata scope after sign-in
+async function verifyAndHandleScopeIssue() {
+  const scopes = await getTokenScopes();
+  if (!scopes.includes('drive.appdata')) {
+    console.warn('Token missing drive.appdata scope. Scopes:', scopes);
+    localStorage.setItem('SM_NEEDS_REAUTH', '1');
+    return false;
+  }
+  return true;
+}
+
 // Finds the SpendMeter data file on Drive; caches its file-id.
 async function getDriveFileId() {
   if (driveFileId) return driveFileId;
@@ -3202,24 +3350,33 @@ async function getDriveFileId() {
 // Newest copy wins: compares local "last changed" with Drive's stored mtime.
 // Returns true if local data was replaced by a newer cloud copy.
 async function pullCloudData() {
-  if (!currentUser || !driveAccessToken) return false;
-  if (!await ensureToken()) return false;
+  if (!currentUser || !driveAccessToken) { console.log('SM pull: no user/token'); return false; }
+  if (!await ensureToken()) { console.log('SM pull: ensureToken failed'); return false; }
   try {
     const fileId = await getDriveFileId();
+    console.log('SM pull: fileId =', fileId);
     if (!fileId) {
       // No cloud file yet — push local data if available
       if (localStorage.getItem(STORE_KEY)) await pushCloudData();
       return false;
     }
     // Read cloud file content
-    const cloudData = await fetch(
+    const resp = await fetch(
       'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media',
       { headers: { Authorization: 'Bearer ' + driveAccessToken } }
-    ).then(r => r.json());
+    );
+    if (!resp.ok) {
+      console.warn('SM pull: fetch file failed', resp.status);
+      if (resp.status === 401 || resp.status === 403) localStorage.setItem('SM_NEEDS_REAUTH', '1');
+      return false;
+    }
+    const cloudData = await resp.json();
+    console.log('SM pull: cloudData keys =', Object.keys(cloudData), 'has spendmeter =', !!cloudData.spendmeter);
 
     const localMtime  = Number(localStorage.getItem(LOCAL_MTIME_KEY) || 0);
     const cloudMtime  = Number(cloudData.clientUpdatedAt || cloudData.mtime || 0);
     const hasLocalData = !!localStorage.getItem(STORE_KEY);
+    console.log('SM pull: cloudMtime =', cloudMtime, 'localMtime =', localMtime, 'hasLocalData =', hasLocalData);
 
     // Pull if: (a) fresh install / no local data — always restore from cloud
     //          (b) cloud is strictly newer than local
@@ -3229,15 +3386,17 @@ async function pullCloudData() {
       const changed = incoming !== localStorage.getItem(STORE_KEY);
       localStorage.setItem(STORE_KEY, incoming);
       localStorage.setItem(LOCAL_MTIME_KEY, String(cloudMtime || Date.now()));
-      console.log('SpendMeter: restored data from Drive backup');
+      const txCount = cloudData.spendmeter && cloudData.spendmeter.transactions ? cloudData.spendmeter.transactions.length : '?';
+      console.log('SM pull: restored from Drive — transactions:', txCount);
       // Return 'fetched' to signal data was written (even if content identical)
       return changed ? true : 'fetched';
     }
     if (hasLocalData && localMtime >= cloudMtime) {
+      console.log('SM pull: local is newer, pushing to Drive');
       await pushCloudData();  // this device has newer (or the only) data
     }
   } catch(err) {
-    console.error('pullCloudData:', err);
+    console.error('SM pullCloudData error:', err);
   }
   return false;
 }
@@ -8034,7 +8193,10 @@ function importDataFromFile(evt){
           localStorage.setItem(STORE_KEY, JSON.stringify(data));
           localStorage.setItem(LOCAL_MTIME_KEY, String(Date.now()));
           load(); renderAll();
-          showToast('✅ Data imported successfully');
+          // Close settings sheet so user can see their imported data on the home screen
+          closeSheet('sheetSettings');
+          const txCount = Array.isArray(data.transactions) ? data.transactions.length : '?';
+          showToast('✅ Imported — ' + txCount + ' transactions loaded');
           // Sync to Drive if signed in
           if (currentUser && driveAccessToken) {
             pushCloudData().then(ok => { if (ok) showToast('✅ Imported data backed up to Drive'); });
