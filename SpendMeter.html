@@ -4,34 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Spend Meter — Track • Plan • Grow</title>
-<!-- Firebase SDK (Auth + Firestore) -->
-<script type="module">
-  import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
-  import { getAuth, GoogleAuthProvider, signInWithCredential, signOut as fbSignOut } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
-  import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
-
-  const firebaseConfig = {
-    apiKey: "AIzaSyC9qW7ckGfCk3marpDYKBUUBUFL8OIVRxE",
-    authDomain: "spend-meter-1f407.firebaseapp.com",
-    projectId: "spend-meter-1f407",
-    storageBucket: "spend-meter-1f407.firebasestorage.app",
-    messagingSenderId: "569152179406",
-    appId: "1:569152179406:android:def1d715b1cf444216149f"
-  };
-
-  const app = initializeApp(firebaseConfig);
-  window._fbApp    = app;
-  window._fbAuth   = getAuth(app);
-  window._fbDb     = getFirestore(app);
-  window._fbDoc    = doc;
-  window._fbGetDoc = getDoc;
-  window._fbSetDoc = setDoc;
-  window._fbServerTimestamp = serverTimestamp;
-  window._fbGoogleProvider  = GoogleAuthProvider;
-  window._fbSignInWithCredential = signInWithCredential;
-  window._fbSignOut = fbSignOut;
-  window._firebaseReady = true;
-  document.dispatchEvent(new Event('firebase-ready'));
+<!-- Supabase SDK -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+  (function() {
+    const SUPA_URL = 'https://xnlnnbpphewjyanqotqg.supabase.co';
+    const SUPA_KEY = 'sb_publishable_2hQAENg6O-ezLxuz1tIkOQ_NoS4sx1O';
+    window._supabase = supabase.createClient(SUPA_URL, SUPA_KEY);
+    window._supabaseReady = true;
+    document.dispatchEvent(new Event('supabase-ready'));
+  })();
 </script>
 <script>/* jsPDF (bundled for offline PDF export) */
 /** @license
@@ -2800,7 +2782,7 @@ canvas{width:100%; display:block;}
 
 /* -------- FIRESTORE / GOOGLE AUTH SETUP -------- */
 // Firebase project: spend-meter-1f407
-// Firestore path: users/{uid}  — field: spendmeter (JSON string), clientUpdatedAt (number)
+// Supabase table: user_data — columns: user_id, spendmeter (text), client_updated_at (bigint)
 
 const LOCAL_MTIME_KEY = 'spendmete_local_mtime';
 let currentUser    = null;
@@ -2810,15 +2792,14 @@ function isNativeApp() {
   return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 }
 
-/* ---- Firestore helpers ---- */
-function fsDb()     { return window._fbDb; }
-function fsDoc(uid) { return window._fbDoc(fsDb(), 'users', uid); }
+/* ---- Supabase helpers ---- */
+function getSupabase() { return window._supabase; }
 
-async function waitFirebase(timeout = 5000) {
-  if (window._firebaseReady) return true;
+async function waitSupabase(timeout = 5000) {
+  if (window._supabaseReady) return true;
   return new Promise(resolve => {
     const t = setTimeout(() => resolve(false), timeout);
-    document.addEventListener('firebase-ready', () => { clearTimeout(t); resolve(true); }, { once: true });
+    document.addEventListener('supabase-ready', () => { clearTimeout(t); resolve(true); }, { once: true });
   });
 }
 
@@ -2842,17 +2823,20 @@ async function nativeSignIn() {
     const idToken = (res.authentication && res.authentication.idToken) || res.idToken;
     if (!idToken) throw new Error('No idToken returned from Google');
 
-    // Sign into Firebase with the Google credential
-    await waitFirebase();
-    const credential = window._fbGoogleProvider.credential(idToken);
-    const fbResult   = await window._fbSignInWithCredential(window._fbAuth, credential);
-    const fbUser     = fbResult.user;
+    // Sign into Supabase with the Google idToken
+    await waitSupabase();
+    const { data, error } = await getSupabase().auth.signInWithIdToken({
+      provider: 'google',
+      token: idToken
+    });
+    if (error) throw error;
+    const sbUser = data.user;
 
     const user = {
-      uid:         fbUser.uid,
-      email:       fbUser.email || '',
-      displayName: fbUser.displayName || res.name || '',
-      photoURL:    fbUser.photoURL || res.imageUrl || ''
+      uid:         sbUser.id,
+      email:       sbUser.email || '',
+      displayName: sbUser.user_metadata?.full_name || sbUser.user_metadata?.name || res.name || '',
+      photoURL:    sbUser.user_metadata?.avatar_url || sbUser.user_metadata?.picture || res.imageUrl || ''
     };
     await onUserSignedIn(user);
     readSmsInbox().catch(e => console.warn('SMS inbox scan failed:', e));
@@ -2865,18 +2849,12 @@ async function nativeSignIn() {
 async function webSignIn() {
   const msg = document.getElementById('loginMsg');
   try {
-    await waitFirebase();
-    const provider = new window._fbGoogleProvider();
-    const { signInWithPopup } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js');
-    const result = await signInWithPopup(window._fbAuth, provider);
-    const fbUser = result.user;
-    const user = {
-      uid:         fbUser.uid,
-      email:       fbUser.email || '',
-      displayName: fbUser.displayName || '',
-      photoURL:    fbUser.photoURL || ''
-    };
-    await onUserSignedIn(user);
+    await waitSupabase();
+    const { data, error } = await getSupabase().auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: window.location.href }
+    });
+    if (error) throw error;
   } catch(e) {
     console.error('webSignIn error:', e);
     if (msg) { msg.textContent = 'Sign-in failed: ' + (e.message || e); msg.className = 'login-msg err'; }
@@ -2892,9 +2870,9 @@ async function handleSignOut() {
     } catch(e) { console.warn('Native sign out:', e); }
   }
   try {
-    await waitFirebase();
-    await window._fbSignOut(window._fbAuth);
-  } catch(e) { console.warn('Firebase sign out:', e); }
+    await waitSupabase();
+    await getSupabase().auth.signOut();
+  } catch(e) { console.warn('Supabase sign out:', e); }
   currentUser = null;
   onUserSignedOut();
 }
@@ -2964,11 +2942,19 @@ function initAuth() {
       const idToken = (res.authentication && res.authentication.idToken) || res.idToken;
       if (!idToken) return;
       try {
-        await waitFirebase();
-        const credential = window._fbGoogleProvider.credential(idToken);
-        const fbResult   = await window._fbSignInWithCredential(window._fbAuth, credential);
-        const fbUser     = fbResult.user;
-        let user = { uid: fbUser.uid, email: fbUser.email || '', displayName: fbUser.displayName || '', photoURL: fbUser.photoURL || '' };
+        await waitSupabase();
+        const { data, error } = await getSupabase().auth.signInWithIdToken({
+          provider: 'google',
+          token: idToken
+        });
+        if (error) throw error;
+        const sbUser = data.user;
+        const user = {
+          uid:         sbUser.id,
+          email:       sbUser.email || '',
+          displayName: sbUser.user_metadata?.full_name || sbUser.user_metadata?.name || '',
+          photoURL:    sbUser.user_metadata?.avatar_url || sbUser.user_metadata?.picture || ''
+        };
         await onUserSignedIn(user);
         await readSmsInbox();
       } catch(e) { console.warn('Silent sign-in failed:', e); }
@@ -2976,18 +2962,31 @@ function initAuth() {
     return;
   }
 
-  // Web: listen for Firebase Auth state changes
-  waitFirebase().then(() => {
-    const { onAuthStateChanged } = window._fbAuth && window._fbAuth.constructor
-      ? { onAuthStateChanged: null } : {};
-    // Use dynamic import for web auth listener
-    import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js').then(({ onAuthStateChanged }) => {
-      onAuthStateChanged(window._fbAuth, async (fbUser) => {
-        if (fbUser) {
-          const user = { uid: fbUser.uid, email: fbUser.email || '', displayName: fbUser.displayName || '', photoURL: fbUser.photoURL || '' };
-          await onUserSignedIn(user);
-        }
-      });
+  // Web: listen for Supabase Auth state changes
+  waitSupabase().then(() => {
+    getSupabase().auth.getSession().then(({ data: { session } }) => {
+      if (session && session.user) {
+        const sbUser = session.user;
+        const user = {
+          uid:         sbUser.id,
+          email:       sbUser.email || '',
+          displayName: sbUser.user_metadata?.full_name || sbUser.user_metadata?.name || '',
+          photoURL:    sbUser.user_metadata?.avatar_url || sbUser.user_metadata?.picture || ''
+        };
+        onUserSignedIn(user);
+      }
+    });
+    getSupabase().auth.onAuthStateChange(async (event, session) => {
+      if (session && session.user) {
+        const sbUser = session.user;
+        const user = {
+          uid:         sbUser.id,
+          email:       sbUser.email || '',
+          displayName: sbUser.user_metadata?.full_name || sbUser.user_metadata?.name || '',
+          photoURL:    sbUser.user_metadata?.avatar_url || sbUser.user_metadata?.picture || ''
+        };
+        await onUserSignedIn(user);
+      }
     });
   });
 }
@@ -3185,7 +3184,7 @@ async function diagnosecloudSync() {
     box.scrollTop = box.scrollHeight;
   }
 
-  log('=== Firestore Sync Diagnostic ===');
+  log('=== Supabase Sync Diagnostic ===');
   log('Signed in: ' + (currentUser ? currentUser.email : 'NO'));
   log('Local data: ' + (localStorage.getItem(STORE_KEY) ? '\u2705 present' : '\u274c EMPTY'));
   log('Local mtime: ' + (localStorage.getItem(LOCAL_MTIME_KEY) || '0'));
@@ -3193,18 +3192,22 @@ async function diagnosecloudSync() {
   if (!currentUser) { log('ERROR: Please sign in first.'); return; }
 
   try {
-    await waitFirebase();
-    log('Querying Firestore…');
-    const snap = await window._fbGetDoc(fsDoc(currentUser.uid));
-    if (!snap.exists()) {
-      log('No Firestore document found for this account.');
+    await waitSupabase();
+    log('Querying Supabase…');
+    const { data, error } = await getSupabase()
+      .from('user_data')
+      .select('spendmeter, client_updated_at')
+      .eq('user_id', currentUser.uid)
+      .single();
+    if (error && error.code === 'PGRST116') {
+      log('No Supabase record found for this account.');
       log('This means no backup has been saved yet.');
       log('Tip: Make a transaction and it will auto-backup.');
       return;
     }
-    const data = snap.data();
-    log('\u2705 Firestore document found');
-    log('clientUpdatedAt: ' + (data.clientUpdatedAt ? new Date(Number(data.clientUpdatedAt)).toLocaleString() : 'missing'));
+    if (error) throw error;
+    log('\u2705 Supabase record found');
+    log('clientUpdatedAt: ' + (data.client_updated_at ? new Date(Number(data.client_updated_at)).toLocaleString() : 'missing'));
     log('spendmeter field: ' + (data.spendmeter ? '\u2705 present' : '\u274c MISSING'));
 
     if (data.spendmeter) {
@@ -3234,38 +3237,48 @@ async function diagnosecloudSync() {
   log('=== Diagnostic complete ===');
 }
 
-/* =================== FIRESTORE SYNC =================== */
-// pullCloudData: fetch from Firestore and overwrite local if cloud is newer
+/* =================== SUPABASE SYNC =================== */
+// pullCloudData: fetch from Supabase and overwrite local if cloud is newer
 async function pullCloudData() {
   if (!currentUser) { console.log('SM pull: no user'); return false; }
   try {
-    await waitFirebase();
-    const snap = await window._fbGetDoc(fsDoc(currentUser.uid));
-    if (!snap.exists()) {
-      // No cloud doc yet — push local if we have data
+    await waitSupabase();
+    const { data, error } = await getSupabase()
+      .from('user_data')
+      .select('spendmeter, client_updated_at')
+      .eq('user_id', currentUser.uid)
+      .single();
+
+    if (error && error.code === 'PGRST116') {
+      // No row yet — push local if we have data
       if (localStorage.getItem(STORE_KEY)) await pushCloudData();
       return false;
     }
-    const cloudData  = snap.data();
-    const cloudMtime = Number(cloudData.clientUpdatedAt || 0);
+    if (error) throw error;
+    if (!data) {
+      if (localStorage.getItem(STORE_KEY)) await pushCloudData();
+      return false;
+    }
+
+    const cloudMtime = Number(data.client_updated_at || 0);
     const localMtime = Number(localStorage.getItem(LOCAL_MTIME_KEY) || 0);
     const hasLocal   = !!localStorage.getItem(STORE_KEY);
 
     console.log('SM pull: cloudMtime =', cloudMtime, 'localMtime =', localMtime, 'hasLocal =', hasLocal);
 
     // Restore if: fresh install OR cloud is strictly newer
-    if (cloudData.spendmeter && (!hasLocal || cloudMtime > localMtime)) {
-      const incoming = typeof cloudData.spendmeter === 'string'
-        ? cloudData.spendmeter : JSON.stringify(cloudData.spendmeter);
+    if (data.spendmeter && (!hasLocal || cloudMtime > localMtime)) {
+      const incoming = typeof data.spendmeter === 'string'
+        ? data.spendmeter : JSON.stringify(data.spendmeter);
       const changed = incoming !== localStorage.getItem(STORE_KEY);
       localStorage.setItem(STORE_KEY, incoming);
       localStorage.setItem(LOCAL_MTIME_KEY, String(cloudMtime || Date.now()));
       const txCount = (() => { try { return JSON.parse(incoming).transactions?.length ?? '?'; } catch(_) { return '?'; } })();
-      console.log('SM pull: restored from Firestore — transactions:', txCount);
+      console.log('SM pull: restored from Supabase — transactions:', txCount);
       return changed ? true : 'fetched';
     }
     if (hasLocal && localMtime >= cloudMtime) {
-      console.log('SM pull: local is newer, pushing to Firestore');
+      console.log('SM pull: local is newer, pushing to Supabase');
       await pushCloudData();
     }
   } catch(err) {
@@ -3274,24 +3287,28 @@ async function pullCloudData() {
   return false;
 }
 
-// pushCloudData: write local data to Firestore
+// pushCloudData: write local data to Supabase
 async function pushCloudData() {
   if (!currentUser) return false;
   const raw = localStorage.getItem(STORE_KEY);
   if (!raw) return false;
   try {
-    await waitFirebase();
+    await waitSupabase();
     let mtime = Number(localStorage.getItem(LOCAL_MTIME_KEY) || 0);
     if (!mtime) { mtime = Date.now(); localStorage.setItem(LOCAL_MTIME_KEY, String(mtime)); }
 
-    await window._fbSetDoc(fsDoc(currentUser.uid), {
-      spendmeter:      raw,
-      clientUpdatedAt: mtime,
-      updatedAt:       Date.now()
-    });
+    const { error } = await getSupabase()
+      .from('user_data')
+      .upsert({
+        user_id:           currentUser.uid,
+        spendmeter:        raw,
+        client_updated_at: mtime,
+        updated_at:        Date.now()
+      }, { onConflict: 'user_id' });
 
+    if (error) throw error;
     localStorage.setItem('SM_LAST_SYNC', String(Date.now()));
-    console.log('SM push: saved to Firestore at', new Date(mtime).toISOString());
+    console.log('SM push: saved to Supabase at', new Date(mtime).toISOString());
     return true;
   } catch(err) {
     console.error('SM pushCloudData error:', err);
@@ -3587,7 +3604,7 @@ function load(){
   if(!db.settings.userName) db.settings.userName = db.settings.userName || '';
   // Only persist if we already had data — never write defaults to localStorage
   // before sign-in, otherwise onUserSignedIn sees hadLocalData=true and pushes
-  // empty default data to Firestore, overwriting the real cloud backup.
+  // empty default data to Supabase, overwriting the real cloud backup.
   if(localStorage.getItem(STORE_KEY)) save();
 }
 function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(db)); queueCloudSync(); }
