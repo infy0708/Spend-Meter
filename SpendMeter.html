@@ -2832,6 +2832,17 @@ async function nativeSignIn() {
     if (error) throw error;
     const sbUser = data.user;
 
+    // Wait for Supabase session to be fully active before querying DB
+    // (auth token needs to propagate so RLS auth.uid() works correctly)
+    await new Promise(resolve => setTimeout(resolve, 800));
+
+    // Verify session is active
+    const { data: sessionData } = await getSupabase().auth.getSession();
+    if (!sessionData?.session) {
+      console.warn('nativeSignIn: session not active after signInWithIdToken, retrying…');
+      await new Promise(resolve => setTimeout(resolve, 1200));
+    }
+
     const user = {
       uid:         sbUser.id,
       email:       sbUser.email || '',
@@ -2949,6 +2960,8 @@ function initAuth() {
         });
         if (error) throw error;
         const sbUser = data.user;
+        // Wait for session to propagate before DB queries
+        await new Promise(resolve => setTimeout(resolve, 800));
         const user = {
           uid:         sbUser.id,
           email:       sbUser.email || '',
