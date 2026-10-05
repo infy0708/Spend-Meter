@@ -2780,8 +2780,8 @@ canvas{width:100%; display:block;}
    Google Sign-In (OAuth 2.0) for auth; Google cloud REST API for cloud sync.
 ===================================================================== */
 
-/* -------- FIRESTORE / GOOGLE AUTH SETUP -------- */
-// Firebase project: spend-meter-1f407
+/* -------- SUPABASE / GOOGLE AUTH SETUP -------- */
+// Supabase project: xnlnnbpphewjyanqotqg
 // Supabase table: user_data — columns: user_id, spendmeter (text), client_updated_at (bigint)
 
 const LOCAL_MTIME_KEY = 'spendmete_local_mtime';
@@ -3186,7 +3186,7 @@ function parseBankSms(sms){
   showToast('✅ SMS read — verify & save');
 }
 
-/* ====== FIRESTORE SYNC DIAGNOSTIC ====== */
+/* ====== SUPABASE SYNC DIAGNOSTIC ====== */
 async function diagnosecloudSync() {
   const box = document.getElementById('syncDiagLog');
   if (!box) return;
