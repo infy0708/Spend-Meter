@@ -6,11 +6,10 @@
     "GoogleAuth": {
       "scopes": [
         "profile",
-        "email",
-        "https://www.googleapis.com/auth/drive.appdata"
+        "email"
       ],
       "serverClientId": "569152179406-ubojvvv8ktncdkbmh17fgo9ssa61ml51.apps.googleusercontent.com",
-      "forceCodeForRefreshToken": false
+      "forceCodeForRefreshToken": true
     }
   }
 }
