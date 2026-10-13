@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Spend Meter — Track • Plan • Grow</title>
+<!-- v1.0.69 — balanceHistory cap, native biometric, Supabase key via secrets, version check, recurring transactions -->
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
@@ -3199,7 +3200,19 @@ async function diagnosecloudSync() {
 
   log('=== Supabase Sync Diagnostic ===');
   log('Signed in: ' + (currentUser ? currentUser.email : 'NO'));
-  log('Local data: ' + (localStorage.getItem(STORE_KEY) ? '\u2705 present' : '\u274c EMPTY'));
+  const rawLocal = localStorage.getItem(STORE_KEY);
+  log('Local data: ' + (rawLocal ? '\u2705 present' : '\u274c EMPTY'));
+  if (rawLocal) {
+    const sizeKB = (new Blob([rawLocal]).size / 1024).toFixed(1);
+    const sizeMB = (sizeKB / 1024).toFixed(2);
+    log('Local data size: ' + sizeKB + ' KB (' + sizeMB + ' MB)' + (sizeKB > 3500 ? ' \u26a0\ufe0f LARGE \u2014 near limit' : ' \u2705 OK'));
+    try {
+      const parsed = JSON.parse(rawLocal);
+      log('Transactions: ' + (parsed.transactions ? parsed.transactions.length : 0));
+      log('Chat history entries: ' + (parsed.chatHistory ? parsed.chatHistory.length : 0));
+      log('Accounts: ' + (parsed.accounts ? parsed.accounts.length : 0));
+    } catch(_) {}
+  }
   log('Local mtime: ' + (localStorage.getItem(LOCAL_MTIME_KEY) || '0'));
 
   if (!currentUser) { log('ERROR: Please sign in first.'); return; }
@@ -3310,11 +3323,27 @@ async function pushCloudData() {
     let mtime = Number(localStorage.getItem(LOCAL_MTIME_KEY) || 0);
     if (!mtime) { mtime = Date.now(); localStorage.setItem(LOCAL_MTIME_KEY, String(mtime)); }
 
+    // Strip chatHistory from cloud backup — it grows unboundedly and is
+    // non-essential (AI chat context). Keeping it out reduces blob size
+    // significantly and avoids hitting Supabase row/bandwidth limits.
+    let cloudPayload = raw;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed.chatHistory && parsed.chatHistory.length > 0) {
+        parsed.chatHistory = [];
+        cloudPayload = JSON.stringify(parsed);
+      }
+    } catch(_) { /* use raw as-is if parse fails */ }
+
+    // Log payload size to help diagnose storage issues
+    const payloadKB = (new Blob([cloudPayload]).size / 1024).toFixed(1);
+    console.log('SM push: payload size =', payloadKB, 'KB');
+
     const { error } = await getSupabase()
       .from('user_data')
       .upsert({
         user_id:           currentUser.uid,
-        spendmeter:        raw,
+        spendmeter:        cloudPayload,
         client_updated_at: mtime,
         updated_at:        Date.now()
       }, { onConflict: 'user_id' });
@@ -3322,9 +3351,11 @@ async function pushCloudData() {
     if (error) throw error;
     localStorage.setItem('SM_LAST_SYNC', String(Date.now()));
     console.log('SM push: saved to Supabase at', new Date(mtime).toISOString());
+    setBackupStatus('ok');
     return true;
   } catch(err) {
     console.error('SM pushCloudData error:', err);
+    setBackupStatus('error', 'Sync failed');
     return false;
   }
 }
@@ -3611,6 +3642,10 @@ function load(){
     if(legacyThisMonth) db.budgetPlan = { amount: legacyThisMonth.amount, currency: legacyThisMonth.currency, overall: legacyThisMonth.overall, categories: legacyThisMonth.categories||[] };
   }
   if(!db.chatHistory) db.chatHistory = [];
+  // Cap balanceHistory to last 365 entries per account (prevents storage bloat)
+  if(db.accounts) db.accounts.forEach(a=>{ if(a.balanceHistory && a.balanceHistory.length>365) a.balanceHistory=a.balanceHistory.slice(-365); });
+  // Migrate existing subscriptions to have autoPost + lastPostedMonth fields
+  if(db.subscriptions) db.subscriptions.forEach(s=>{ if(s.autoPost===undefined) s.autoPost=true; if(s.lastPostedMonth===undefined) s.lastPostedMonth=''; });
   if(!db.goals) db.goals = [];
   if(!db.loans) db.loans = [];
   if(!db.splits) db.splits = [];
@@ -3620,7 +3655,46 @@ function load(){
   // empty default data to Supabase, overwriting the real cloud backup.
   if(localStorage.getItem(STORE_KEY)) save();
 }
-function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(db)); queueCloudSync(); }
+function save(){
+  const json = JSON.stringify(db);
+  try {
+    localStorage.setItem(STORE_KEY, json);
+  } catch(e) {
+    if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
+      // Storage full — try trimming chatHistory first (largest non-essential data)
+      if (db.chatHistory && db.chatHistory.length > 0) {
+        db.chatHistory = db.chatHistory.slice(-20); // keep only last 20 messages
+        try {
+          localStorage.setItem(STORE_KEY, JSON.stringify(db));
+          showToast('⚠️ Storage nearly full — old chat history trimmed');
+        } catch(e2) {
+          // Still failing — try clearing chat history entirely
+          db.chatHistory = [];
+          try {
+            localStorage.setItem(STORE_KEY, JSON.stringify(db));
+            showToast('⚠️ Storage full — chat history cleared to free space');
+          } catch(e3) {
+            console.error('SM save: storage quota exceeded even after trimming:', e3);
+            showToast('❌ Storage full — please export a backup from Settings');
+          }
+        }
+      } else {
+        console.error('SM save: storage quota exceeded:', e);
+        showToast('❌ Storage full — please export a backup from Settings');
+      }
+    } else {
+      console.error('SM save error:', e);
+    }
+  }
+  // Warn user when local data is getting large (>3.5 MB)
+  try {
+    const sz = new Blob([JSON.stringify(db)]).size;
+    if (sz > 3.5 * 1024 * 1024) {
+      console.warn('SM save: local data size is', (sz/1024/1024).toFixed(1), 'MB — approaching localStorage limit');
+    }
+  } catch(_) {}
+  queueCloudSync();
+}
 
 function uid(){ return 'x'+Math.random().toString(36).slice(2,10)+Date.now().toString(36); }
 function monthKey(d){ const dt=new Date(d); return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0'); }
@@ -4248,14 +4322,25 @@ function renderSubs(){
     const c = catInfo(s.category);
     const daysLeft = s.day>=today ? s.day-today : (s.day-today+31);
     const symbol = currencySymbol(s.currency);
+    const autoLabel = s.autoPost ? '🔄 Auto-post on' : '⏸ Auto-post off';
     return `<div class="txn">
       <div class="txn-icon" style="background:${c.color}22; color:${c.color};">${c.icon}</div>
-      <div class="txn-info"><div class="txn-title">${s.name}</div><div class="txn-sub">Due on ${s.day}${ordinal(s.day)} · ${daysLeft===0?'Today':daysLeft+' days left'}</div></div>
+      <div class="txn-info">
+        <div class="txn-title">${s.name}</div>
+        <div class="txn-sub">Due on ${s.day}${ordinal(s.day)} · ${daysLeft===0?'Today':daysLeft+' days left'} · <span onclick="toggleSubAutoPost('${s.id}')" style="color:var(--blue);cursor:pointer;font-weight:600;">${autoLabel}</span></div>
+      </div>
       <div class="txn-amt out">${symbol}${fmt(s.amount)}</div>
     </div>`;
   }).join('');
 }
 function ordinal(n){ const s=["th","st","nd","rd"]; const v=n%100; return s[(v-20)%10]||s[v]||s[0]; }
+function toggleSubAutoPost(id){
+  const sub = db.subscriptions.find(s=>s.id===id);
+  if(!sub) return;
+  sub.autoPost = !sub.autoPost;
+  save(); renderSubs();
+  showToast(sub.autoPost ? `🔄 Auto-post ON for ${sub.name}` : `⏸ Auto-post OFF for ${sub.name}`);
+}
 
 /* ===================== TRANSACTIONS ===================== */
 function txnIcon(t){
@@ -4674,6 +4759,7 @@ function saveBalanceUpdate(){
   const nickname = document.getElementById('ubNickname').value.trim();
   if(!a.balanceHistory) a.balanceHistory = [];
   a.balanceHistory.push({amount, capturedAt: date+'T'+time+':00', nickname});
+  if(a.balanceHistory.length > 365) a.balanceHistory = a.balanceHistory.slice(-365);
   a.balance = amount;
   save();
   closeSheet('sheetUpdateBalance');
@@ -5036,6 +5122,7 @@ function saveNewAccount(){
       a.balance = bal;
       if(!a.balanceHistory) a.balanceHistory = [];
       a.balanceHistory.push({amount:bal, capturedAt:new Date().toISOString(), nickname:'Manual edit'});
+      if(a.balanceHistory.length > 365) a.balanceHistory = a.balanceHistory.slice(-365);
     }
     save();
     editingAcctId = null;
@@ -7170,11 +7257,54 @@ function saveSub(){
   const day = parseInt(document.getElementById('subDay').value);
   const category = document.getElementById('subCategory').value;
   if(!name || !amount || !day || day<1 || day>31){ showToast('Fill all fields correctly'); return; }
-  db.subscriptions.push({id:uid(), name, amount, currency, day, category});
+  db.subscriptions.push({id:uid(), name, amount, currency, day, category, autoPost:true, lastPostedMonth:''});
   save();
   document.getElementById('subName').value=''; document.getElementById('subAmount').value=''; document.getElementById('subDay').value='';
   closeSheet('sheetSub'); renderSubs(); renderAlerts();
   showToast('Subscription added ✓');
+}
+
+/* ===================== RECURRING TRANSACTIONS AUTO-POST =====================
+   Runs once on app start. For every subscription with autoPost:true, checks
+   if today >= its billing day this month, and if no transaction has been
+   posted for it this month yet (tracked by lastPostedMonth). Posts one
+   expense transaction automatically and updates lastPostedMonth so it
+   never double-posts in the same calendar month. */
+function processRecurringTransactions(){
+  if(!db.subscriptions || !db.subscriptions.length) return;
+  const now = new Date();
+  const todayDay = now.getDate();
+  const mk = monthKey(now); // e.g. "2026-10"
+  const defaultAcct = db.accounts && db.accounts.find(a=>a.currency===db.settings.defaultCurrency) || (db.accounts && db.accounts[0]);
+  let anyPosted = false;
+
+  db.subscriptions.forEach(sub => {
+    if(!sub.autoPost) return;                  // user turned off auto-post for this sub
+    if(sub.lastPostedMonth === mk) return;      // already posted this month
+    if(todayDay < sub.day) return;             // billing day not reached yet
+
+    // Post the recurring expense transaction
+    addTransaction({
+      type:      'expense',
+      amount:    sub.amount,
+      currency:  sub.currency || db.settings.defaultCurrency,
+      category:  sub.category || 'subscription',
+      merchant:  sub.name,
+      accountId: defaultAcct ? defaultAcct.id : '',
+      date:      `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(sub.day).padStart(2,'0')}`,
+      time:      '09:00',
+      note:      'Auto-posted recurring payment'
+    });
+    sub.lastPostedMonth = mk;
+    anyPosted = true;
+    console.log('SM recurring: auto-posted', sub.name, 'for', mk);
+  });
+
+  if(anyPosted){
+    save();
+    renderAll();
+    showToast('🔔 Recurring payments posted automatically');
+  }
 }
 
 /* ===================== ALERTS ===================== */
@@ -8707,6 +8837,28 @@ function renderAll(){
   renderSplitsTileSub();
   renderUpcomingTileSub();
 }
+const APP_VERSION = '1.0.69';
+
+async function checkForUpdate(){
+  try{
+    const res = await fetch('https://api.github.com/repos/infy0708/Spend-Meter/releases/latest', {cache:'no-cache'});
+    if(!res.ok) return;
+    const data = await res.json();
+    const latest = (data.tag_name || '').replace(/^v/i,'');
+    if(!latest) return;
+    // Compare versions numerically (e.g. 1.0.69 vs 1.0.70)
+    const toNum = v => v.split('.').map(Number).reduce((a,n,i)=>a+n*Math.pow(1000,2-i),0);
+    if(toNum(latest) > toNum(APP_VERSION)){
+      // Show a dismissable banner at the top of the page
+      const banner = document.createElement('div');
+      banner.id = 'updateBanner';
+      banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#1a73c9;color:#fff;font-size:13px;font-weight:600;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px;';
+      banner.innerHTML = `<span>🆕 SpendMeter v${latest} is available!</span><a href="${data.html_url}" target="_blank" style="color:#fff;text-decoration:underline;white-space:nowrap;">Download</a><span onclick="document.getElementById('updateBanner').remove()" style="cursor:pointer;font-size:18px;line-height:1;padding:0 4px;">×</span>`;
+      document.body.prepend(banner);
+    }
+  } catch(e){ /* network unavailable — silently skip */ }
+}
+
 function init(){
   load();
   document.getElementById('mDate').value = todayStr();
@@ -8714,6 +8866,10 @@ function init(){
   fillAccountSelects();
   renderAll();
   initAppLock();
+  // Check for updates in background after 3s (non-blocking)
+  setTimeout(checkForUpdate, 3000);
+  // Auto-post recurring transactions (runs after data is loaded)
+  setTimeout(processRecurringTransactions, 1500);
 }
 init();
 
@@ -8748,6 +8904,13 @@ async function initAppLock(){
 }
 async function biometricIsAvailable(){
   try{
+    // Prefer native Capacitor BiometricAuth plugin (Android/iOS)
+    const plugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BiometricAuth;
+    if(plugin){
+      const result = await plugin.checkBiometry();
+      return result && result.isAvailable;
+    }
+    // Fallback: WebAuthn platform authenticator (web/desktop preview)
     if(!window.PublicKeyCredential || !PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable) return false;
     return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
   } catch(e){ return false; }
@@ -8775,11 +8938,15 @@ document.addEventListener('DOMContentLoaded', ()=>{
 async function attemptBiometricUnlock(){
   const errEl = document.getElementById('appLockMsg');
   try{
-    // A locally-verified platform authenticator challenge — there is no
-    // server, so this only confirms "this device's fingerprint/face
-    // sensor accepted a real user," which is exactly what unlocking a
-    // local app needs. No credential or biometric data ever leaves the
-    // device.
+    // Try native Capacitor BiometricAuth first (fingerprint / face ID on Android/iOS)
+    const plugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BiometricAuth;
+    if(plugin){
+      await plugin.authenticate({ reason: 'Unlock SpendMeter', cancelTitle: 'Use PIN instead' });
+      document.getElementById('appLockGate').classList.add('hidden');
+      errEl.textContent = '';
+      return;
+    }
+    // Fallback: WebAuthn platform authenticator (web preview / desktop)
     const challenge = crypto.getRandomValues(new Uint8Array(32));
     await navigator.credentials.get({
       publicKey: {
@@ -8792,9 +8959,8 @@ async function attemptBiometricUnlock(){
     document.getElementById('appLockGate').classList.add('hidden');
     errEl.textContent = '';
   } catch(e){
-    // No enrolled platform credential yet, or the user cancelled — fall
-    // back silently to PIN entry rather than showing a scary error, since
-    // this can fire automatically on load.
+    // User cancelled or no enrolled biometric — fall back silently to PIN entry.
+    console.log('SM biometric: not completed', e && e.message);
   }
 }
 function renderAppLockSettingsUI(){
