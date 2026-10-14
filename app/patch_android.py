@@ -72,3 +72,20 @@ if 'SmsPlugin' not in ma:
     print('SmsPlugin registered in MainActivity.java')
 else:
     print('SmsPlugin already registered in MainActivity.java')
+
+# 6. Add deep-link intent-filter for com.safi.spendmeter:// (OAuth redirect back to app)
+m2 = open(manifest).read()
+deep_link_filter = '''
+        <intent-filter android:autoVerify="true">
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="com.safi.spendmeter" />
+        </intent-filter>'''
+if 'android:scheme="com.safi.spendmeter"' not in m2:
+    # Insert inside the main <activity> tag, just before its closing </activity>
+    m2 = m2.replace('</activity>', deep_link_filter + '\n    </activity>', 1)
+    open(manifest, 'w').write(m2)
+    print('Deep link intent-filter added to AndroidManifest.xml')
+else:
+    print('Deep link intent-filter already present')
