@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Spend Meter — Track • Plan • Grow</title>
-<!-- v1.0.70 — anonymous auth (no login screen), removed Google sign-in -->
+<!-- v1.0.71 — optional Google sign-in (non-blocking), device UUID always created first -->
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
@@ -2461,9 +2461,18 @@ canvas{width:100%; display:block;}
         </div>
 
 
-        <!-- Device sync info -->
+        <!-- Google Account / Cloud Sync -->
         <div style="margin-top:24px; padding:0 8px 20px;" id="signOutSection">
-          <div style="font-size:11px; color:var(--ink-soft); text-align:center; margin-top:8px;" id="signedInAs"></div>
+          <div id="googleSignInCard" style="background:var(--card);border-radius:14px;padding:14px 16px;text-align:center;">
+            <div style="font-size:13px;font-weight:600;margin-bottom:6px;">☁️ Google Account Sync</div>
+            <div style="font-size:12px;color:var(--ink-soft);margin-bottom:12px;" id="signedInAs">Sign in to sync data across devices</div>
+            <button id="googleSignInBtn" onclick="handleOptionalGoogleSignIn()"
+              style="width:100%;padding:11px;border:none;border-radius:10px;background:#fff;color:#333;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:9px;">
+              <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.08 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-3.59-13.46-8.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+              <span id="googleSignInBtnText">Sign in with Google</span>
+            </button>
+            <div id="googleSignInMsg" style="font-size:11px;margin-top:8px;min-height:14px;color:var(--ink-soft);"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -2785,13 +2794,37 @@ async function waitSupabase(timeout = 5000) {
 /* ---- Anonymous sign-in (no login screen) ---- */
 async function initAnonAuth() {
   await waitSupabase();
+
+  // Listen for auth state changes — catches Google OAuth callback redirect
+  getSupabase().auth.onAuthStateChange(async (event, session) => {
+    if (event === 'SIGNED_IN' && session && session.user && !currentUser) {
+      const sbUser = session.user;
+      const isGoogle = sbUser.app_metadata?.provider === 'google' || sbUser.identities?.some(id => id.provider === 'google');
+      const user = {
+        uid: sbUser.id,
+        email: sbUser.email || '',
+        displayName: sbUser.user_metadata?.full_name || sbUser.user_metadata?.name || (isGoogle ? 'Google user' : 'Device user'),
+        photoURL: sbUser.user_metadata?.avatar_url || sbUser.user_metadata?.picture || ''
+      };
+      await onUserSignedIn(user);
+      updateGoogleSignInUI(user);
+    }
+  });
+
   try {
     // Check if we already have a session stored
     const { data: { session } } = await getSupabase().auth.getSession();
     if (session && session.user) {
       const sbUser = session.user;
-      const user = { uid: sbUser.id, email: '', displayName: 'Device user', photoURL: '' };
+      const isGoogle = sbUser.app_metadata?.provider === 'google' || sbUser.identities?.some(id => id.provider === 'google');
+      const user = {
+        uid: sbUser.id,
+        email: sbUser.email || '',
+        displayName: sbUser.user_metadata?.full_name || sbUser.user_metadata?.name || (isGoogle ? 'Google user' : 'Device user'),
+        photoURL: sbUser.user_metadata?.avatar_url || sbUser.user_metadata?.picture || ''
+      };
       await onUserSignedIn(user);
+      updateGoogleSignInUI(user);
       return;
     }
     // No session — sign in anonymously (creates a new UUID for this device)
@@ -2800,9 +2833,60 @@ async function initAnonAuth() {
     const sbUser = data.user;
     const user = { uid: sbUser.id, email: '', displayName: 'Device user', photoURL: '' };
     await onUserSignedIn(user);
+    updateGoogleSignInUI(user);
   } catch(e) {
     console.warn('Anonymous auth failed, running offline:', e);
     // App still works fully offline with localStorage
+  }
+}
+
+/* ---- Optional Google sign-in (called from Settings) ---- */
+async function handleOptionalGoogleSignIn() {
+  const btn = document.getElementById('googleSignInBtn');
+  const msg = document.getElementById('googleSignInMsg');
+  const btnText = document.getElementById('googleSignInBtnText');
+  // If already signed in with Google, offer sign-out
+  if (currentUser && currentUser.email) {
+    try {
+      await getSupabase().auth.signOut();
+      currentUser = null;
+      try { localStorage.removeItem('SM_CURRENT_USER'); } catch(_) {}
+      // Re-init anonymous session
+      await initAnonAuth();
+    } catch(e) { console.warn('Sign out error:', e); }
+    return;
+  }
+  if (btn) btn.disabled = true;
+  if (msg) msg.textContent = 'Opening Google sign-in…';
+  try {
+    await waitSupabase();
+    const redirectTo = window.location.href.split('#')[0].split('?')[0];
+    const { error } = await getSupabase().auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: redirectTo,
+        queryParams: { access_type: 'offline', prompt: 'select_account' }
+      }
+    });
+    if (error) throw error;
+    // Browser will redirect — nothing more to do here
+  } catch(e) {
+    console.warn('Google sign-in error:', e);
+    if (msg) msg.textContent = 'Sign-in failed: ' + (e.message || 'unknown error');
+    if (btn) btn.disabled = false;
+  }
+}
+
+/* ---- Update the Google sign-in UI in Settings ---- */
+function updateGoogleSignInUI(user) {
+  const el = document.getElementById('signedInAs');
+  const btnText = document.getElementById('googleSignInBtnText');
+  if (user && user.email) {
+    if (el) el.textContent = '✅ Signed in as ' + user.email;
+    if (btnText) btnText.textContent = 'Sign out of Google';
+  } else {
+    if (el) el.textContent = user ? '☁️ Sync active (device ID: ' + (user.uid||'').substring(0,8) + '…)' : 'Sign in to sync across devices';
+    if (btnText) btnText.textContent = 'Sign in with Google';
   }
 }
 
@@ -2820,8 +2904,7 @@ async function handleSignOut() {
 async function onUserSignedIn(user) {
   currentUser = user;
   try { localStorage.setItem('SM_CURRENT_USER', JSON.stringify(user)); } catch(_) {}
-  const el = document.getElementById('signedInAs');
-  if (el) el.textContent = '☁️ Sync active (ID: ' + user.uid.substring(0,8) + '…)';
+  updateGoogleSignInUI(user);
   const hadLocalData = !!localStorage.getItem(STORE_KEY);
 
   if (!hadLocalData) {
@@ -8690,7 +8773,7 @@ function renderAll(){
   renderSplitsTileSub();
   renderUpcomingTileSub();
 }
-const APP_VERSION = '1.0.70';
+const APP_VERSION = '1.0.71';
 
 async function checkForUpdate(){
   try{
