@@ -73,19 +73,26 @@ if 'SmsPlugin' not in ma:
 else:
     print('SmsPlugin already registered in MainActivity.java')
 
-# 6. Add deep-link intent-filter for com.safi.spendmeter:// (OAuth redirect back to app)
+# 6. Add deep-link intent-filters for OAuth redirect back to app
+#    - com.safi.spendmeter:// (preferred, once added to Supabase dashboard)
+#    - http://localhost:3000 (fallback: Supabase default site URL redirect)
 m2 = open(manifest).read()
-deep_link_filter = '''
+deep_link_filters = '''
         <intent-filter android:autoVerify="true">
             <action android:name="android.intent.action.VIEW" />
             <category android:name="android.intent.category.DEFAULT" />
             <category android:name="android.intent.category.BROWSABLE" />
             <data android:scheme="com.safi.spendmeter" />
+        </intent-filter>
+        <intent-filter>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="http" android:host="localhost" android:port="3000" />
         </intent-filter>'''
 if 'android:scheme="com.safi.spendmeter"' not in m2:
-    # Insert inside the main <activity> tag, just before its closing </activity>
-    m2 = m2.replace('</activity>', deep_link_filter + '\n    </activity>', 1)
+    m2 = m2.replace('</activity>', deep_link_filters + '\n    </activity>', 1)
     open(manifest, 'w').write(m2)
-    print('Deep link intent-filter added to AndroidManifest.xml')
+    print('Deep link intent-filters added to AndroidManifest.xml')
 else:
-    print('Deep link intent-filter already present')
+    print('Deep link intent-filters already present')
