@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Spend Meter — Track • Plan • Grow</title>
-<!-- v1.0.73 — Fix OAuth redirect: handle both custom scheme and localhost:3000 token flow -->
+<!-- v1.0.74 — Remove Google login; use Supabase anonymous auth (device UUID) -->
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
@@ -1003,25 +1003,6 @@ canvas{width:100%; display:block;}
 <body>
 
 
-<!-- ===================== GOOGLE LOGIN GATE (first open) ===================== -->
-<div class="login-gate" id="googleLoginGate" style="z-index:10000;">
-  <div style="font-size:54px; margin-bottom:8px;">💰</div>
-  <div style="font-size:24px; font-weight:800; margin-bottom:4px; letter-spacing:-0.5px;">SpendMeter</div>
-  <div style="font-size:13px; color:rgba(255,255,255,0.55); margin-bottom:36px;">Track • Plan • Grow</div>
-  <div class="login-card" style="text-align:center;">
-    <h3 style="margin-bottom:8px;">Sign in to get started</h3>
-    <p style="margin-bottom:20px;">Your data syncs across all your devices automatically.</p>
-    <button id="googleLoginBtn" onclick="handleGoogleLoginGate()"
-      style="width:100%;padding:14px;border:none;border-radius:12px;background:#fff;color:#333;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;">
-      <svg width="20" height="20" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.08 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-3.59-13.46-8.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-      Continue with Google
-    </button>
-    <div id="googleLoginMsg" style="font-size:12px;margin-top:12px;min-height:16px;color:rgba(255,255,255,0.6);"></div>
-  </div>
-  <div style="margin-top:24px; font-size:11px; color:rgba(255,255,255,0.3); text-align:center; max-width:280px; line-height:1.6;">
-    By continuing you agree to use this app for personal expense tracking.<br>Your data is stored securely in Supabase.
-  </div>
-</div>
 
 <!-- ===================== APP LOCK (PIN / biometric) ===================== -->
 <div class="login-gate hidden" id="appLockGate" style="z-index:9999;">
@@ -2481,17 +2462,11 @@ canvas{width:100%; display:block;}
         </div>
 
 
-        <!-- Google Account / Cloud Sync -->
+        <!-- Cloud Sync Status -->
         <div style="margin-top:24px; padding:0 8px 20px;" id="signOutSection">
-          <div id="googleSignInCard" style="background:var(--card);border-radius:14px;padding:14px 16px;text-align:center;">
-            <div style="font-size:13px;font-weight:600;margin-bottom:6px;">☁️ Google Account</div>
-            <div style="font-size:12px;color:var(--ink-soft);margin-bottom:12px;" id="signedInAs">Loading…</div>
-            <button id="googleSignInBtn" onclick="handleOptionalGoogleSignIn()"
-              style="width:100%;padding:11px;border:none;border-radius:10px;background:#fff;color:#333;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:9px;">
-              <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.08 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-3.59-13.46-8.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-              <span id="googleSignInBtnText">Sign in with Google</span>
-            </button>
-            <div id="googleSignInMsg" style="font-size:11px;margin-top:8px;min-height:14px;color:var(--ink-soft);"></div>
+          <div style="background:var(--card);border-radius:14px;padding:14px 16px;text-align:center;">
+            <div style="font-size:13px;font-weight:600;margin-bottom:6px;">☁️ Auto Cloud Sync</div>
+            <div style="font-size:12px;color:var(--ink-soft);" id="signedInAs">Connecting…</div>
           </div>
         </div>
       </div>
@@ -2811,58 +2786,12 @@ async function waitSupabase(timeout = 5000) {
   });
 }
 
-/* ---- Google-first auth (shows login gate on first open) ---- */
-async function initAnonAuth() { return initGoogleAuth(); } // alias for legacy calls
-
-async function initGoogleAuth() {
+/* ---- Anonymous auth — signs in automatically, no Google login required ---- */
+async function initAnonAuth() {
   await waitSupabase();
 
-  // Register deep-link handler for OAuth redirect back from browser
-  // Handles both com.safi.spendmeter:// and http://localhost:3000 redirects
+  // 1. Try to restore an existing Supabase session (persists across app restarts)
   try {
-    const { App } = await import('https://cdn.jsdelivr.net/npm/@capacitor/app@8.1.2/dist/esm/index.js').catch(()=>({App:null}));
-    if (App && App.addListener) {
-      App.addListener('appUrlOpen', async ({ url }) => {
-        if (!url) return;
-        try {
-          // Normalise the URL so we can use URL() on it
-          const normalized = url.startsWith('com.safi.spendmeter://')
-            ? url.replace('com.safi.spendmeter://', 'https://placeholder/')
-            : url;
-          const urlObj = new URL(normalized);
-
-          // PKCE flow: has ?code= parameter
-          const code = urlObj.searchParams.get('code');
-          if (code) {
-            const { data, error } = await getSupabase().auth.exchangeCodeForSession(code);
-            if (!error) { await _handleSupabaseSession(data.session); return; }
-          }
-
-          // Implicit flow: has #access_token= fragment (Supabase default localhost redirect)
-          const hash = urlObj.hash || '';
-          if (hash.includes('access_token=')) {
-            const params = new URLSearchParams(hash.replace('#', ''));
-            const access_token = params.get('access_token');
-            const refresh_token = params.get('refresh_token');
-            if (access_token) {
-              const { data, error } = await getSupabase().auth.setSession({ access_token, refresh_token });
-              if (!error) { await _handleSupabaseSession(data.session); return; }
-            }
-          }
-        } catch(e) { console.warn('appUrlOpen handler error:', e); }
-      });
-    }
-  } catch(_) { /* no @capacitor/app in browser preview — ignore */ }
-
-  // Listen for auth state changes (also catches web OAuth redirect)
-  getSupabase().auth.onAuthStateChange(async (event, session) => {
-    if (event === 'SIGNED_IN' && session && session.user) {
-      await _handleSupabaseSession(session);
-    }
-  });
-
-  try {
-    // Check for existing stored session
     const { data: { session } } = await getSupabase().auth.getSession();
     if (session && session.user) {
       await _handleSupabaseSession(session);
@@ -2870,22 +2799,31 @@ async function initGoogleAuth() {
     }
   } catch(e) { console.warn('getSession error:', e); }
 
-  // No session — show the Google login gate
-  _showGoogleLoginGate();
+  // 2. No session — sign in anonymously (Supabase creates a stable UUID for this device)
+  try {
+    const { data, error } = await getSupabase().auth.signInAnonymously();
+    if (!error && data.session) {
+      await _handleSupabaseSession(data.session);
+      return;
+    }
+    console.warn('Anonymous sign-in error:', error);
+  } catch(e) { console.warn('signInAnonymously error:', e); }
+
+  // 3. Fallback: generate a local UUID and store in localStorage (offline mode)
+  try {
+    let uid = localStorage.getItem('SM_ANON_UID');
+    if (!uid) {
+      uid = (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random()*16|0; return (c==='x'?r:(r&0x3|0x8)).toString(16);
+      }));
+      localStorage.setItem('SM_ANON_UID', uid);
+    }
+    await onUserSignedIn({ uid, email: '', displayName: 'Device user', photoURL: '' });
+  } catch(e) { console.warn('Fallback anon auth error:', e); }
 }
 
-function _showGoogleLoginGate() {
-  const gate = document.getElementById('googleLoginGate');
-  if (gate) gate.classList.remove('hidden');
-  // Make sure gate is visible (not hidden by class; default is shown)
-  if (gate) gate.style.display = 'flex';
-}
-
-function _hideGoogleLoginGate() {
-  const gate = document.getElementById('googleLoginGate');
-  if (gate) gate.classList.add('hidden');
-  if (gate) gate.style.display = 'none';
-}
+function _showGoogleLoginGate() { /* no-op — login gate removed */ }
+function _hideGoogleLoginGate() { /* no-op — login gate removed */ }
 
 async function _handleSupabaseSession(session) {
   if (!session || !session.user) return;
@@ -2902,74 +2840,14 @@ async function _handleSupabaseSession(session) {
   updateGoogleSignInUI(user);
 }
 
-/* ---- Called when user taps "Continue with Google" on the login gate ---- */
-async function handleGoogleLoginGate() {
-  const btn = document.getElementById('googleLoginBtn');
-  const msg = document.getElementById('googleLoginMsg');
-  if (btn) btn.disabled = true;
-  if (msg) msg.textContent = 'Opening Google sign-in…';
-  try {
-    await waitSupabase();
-    const { error } = await getSupabase().auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: 'com.safi.spendmeter://login-callback',
-        queryParams: { access_type: 'offline', prompt: 'select_account' }
-      }
-    });
-    if (error) throw error;
-    // App/browser will redirect back via deep link or page reload
-  } catch(e) {
-    console.warn('Google login error:', e);
-    if (msg) msg.textContent = 'Sign-in failed: ' + (e.message || 'unknown error');
-    if (btn) btn.disabled = false;
-  }
-}
+/* ---- Stubs (Google login removed) ---- */
+async function handleGoogleLoginGate() {}
 
-/* ---- Optional Google sign-in / sign-out (called from Settings) ---- */
-async function handleOptionalGoogleSignIn() {
-  const btn = document.getElementById('googleSignInBtn');
-  const msg = document.getElementById('googleSignInMsg');
-  const btnText = document.getElementById('googleSignInBtnText');
-  // If already signed in with Google, offer sign-out → show login gate again
-  if (currentUser && currentUser.email) {
-    try {
-      await getSupabase().auth.signOut();
-      currentUser = null;
-      try { localStorage.removeItem('SM_CURRENT_USER'); } catch(_) {}
-      _showGoogleLoginGate();
-    } catch(e) { console.warn('Sign out error:', e); }
-    return;
-  }
-  if (btn) btn.disabled = true;
-  if (msg) msg.textContent = 'Opening Google sign-in…';
-  try {
-    await waitSupabase();
-    const { error } = await getSupabase().auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: 'com.safi.spendmeter://login-callback',
-        queryParams: { access_type: 'offline', prompt: 'select_account' }
-      }
-    });
-    if (error) throw error;
-  } catch(e) {
-    console.warn('Google sign-in error:', e);
-    if (msg) msg.textContent = 'Sign-in failed: ' + (e.message || 'unknown error');
-    if (btn) btn.disabled = false;
-  }
-}
-
-/* ---- Update the Google sign-in UI in Settings ---- */
+/* ---- Update sync status in Settings ---- */
 function updateGoogleSignInUI(user) {
   const el = document.getElementById('signedInAs');
-  const btnText = document.getElementById('googleSignInBtnText');
-  if (user && user.email) {
-    if (el) el.textContent = '✅ Signed in as ' + user.email;
-    if (btnText) btnText.textContent = 'Sign out of Google';
-  } else {
-    if (el) el.textContent = user ? '☁️ Sync active (device ID: ' + (user.uid||'').substring(0,8) + '…)' : '';
-    if (btnText) btnText.textContent = 'Sign in with Google';
+  if (el) {
+    el.textContent = user ? '☁️ Auto-sync active (ID: ' + (user.uid||'').substring(0,8) + '…)' : '';
   }
 }
 
@@ -8856,7 +8734,7 @@ function renderAll(){
   renderSplitsTileSub();
   renderUpcomingTileSub();
 }
-const APP_VERSION = '1.0.73';
+const APP_VERSION = '1.0.74';
 
 async function checkForUpdate(){
   try{
