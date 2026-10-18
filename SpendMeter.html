@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Spend Meter — Track • Plan • Grow</title>
 <!-- v1.0.74 — Remove Google login; use Supabase anonymous auth (device UUID) -->
 <!-- Supabase SDK -->
@@ -473,7 +473,7 @@ body{font-family:'Segoe UI', system-ui, -apple-system, Roboto, sans-serif; backg
 #app{max-width:480px; margin:0 auto; height:100vh; height:100dvh; display:flex; flex-direction:column; background:var(--bg); position:relative; box-shadow:0 0 40px rgba(0,0,0,0.08);}
 
 /* Header */
-.topbar{background:var(--navy); background-image: radial-gradient(circle at 90% -20%, rgba(63,169,245,0.35), transparent 60%), radial-gradient(circle at -10% 100%, rgba(15,174,107,0.25), transparent 55%); color:#fff; padding:16px 18px 18px; flex-shrink:0; position:relative; z-index:2;}
+.topbar{background:var(--navy); background-image: radial-gradient(circle at 90% -20%, rgba(63,169,245,0.35), transparent 60%), radial-gradient(circle at -10% 100%, rgba(15,174,107,0.25), transparent 55%); color:#fff; padding:calc(16px + env(safe-area-inset-top, 0px)) 18px 18px; flex-shrink:0; position:relative; z-index:2;}
 .topbar-row{display:flex; align-items:center; justify-content:space-between;}
 .brand{display:flex; align-items:center; gap:9px;}
 .brand-mark{width:36px;height:36px;border-radius:50%; background:var(--grad); display:flex;align-items:center;justify-content:center; font-weight:800;font-size:15px;color:#fff; box-shadow:0 3px 10px rgba(15,174,107,0.4);}
@@ -2467,6 +2467,7 @@ canvas{width:100%; display:block;}
           <div style="background:var(--card);border-radius:14px;padding:14px 16px;text-align:center;">
             <div style="font-size:13px;font-weight:600;margin-bottom:6px;">☁️ Auto Cloud Sync</div>
             <div style="font-size:12px;color:var(--ink-soft);" id="signedInAs">Connecting…</div>
+            <button class="signout-btn" onclick="handleSignOut()" style="margin-top:12px;">🚪 Sign Out</button>
           </div>
         </div>
       </div>
@@ -2851,12 +2852,28 @@ function updateGoogleSignInUI(user) {
   }
 }
 
-/* ---- stub for any leftover sign-out calls ---- */
+/* ---- Sign out: clears Supabase session, Google auth, and local state ---- */
 async function handleSignOut() {
-  try { await getSupabase().auth.signOut(); } catch(_) {}
+  try {
+    // Sign out of Supabase (clears the JWT session)
+    await getSupabase().auth.signOut();
+  } catch(_) {}
+
+  // Sign out of native Google (Capacitor Firebase Auth) if available
+  try {
+    const { FirebaseAuthentication } = window.Capacitor && window.Capacitor.Plugins || {};
+    if (FirebaseAuthentication) await FirebaseAuthentication.signOut();
+  } catch(_) {}
+
+  // Clear all local auth state
   currentUser = null;
   try { localStorage.removeItem('SM_CURRENT_USER'); } catch(_) {}
-  showToast('Signed out — restart app to re-sync');
+  try { localStorage.removeItem('supabase.auth.token'); } catch(_) {}
+
+  showToast('Signed out successfully');
+
+  // Reload app after short delay so login screen appears
+  setTimeout(() => { location.reload(); }, 1200);
 }
 
 

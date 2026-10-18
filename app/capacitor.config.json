@@ -2,6 +2,9 @@
   "appId": "com.safi.spendmeter",
   "appName": "Spend Meter",
   "webDir": "www",
+  "android": {
+    "backgroundColor": "#0a1628"
+  },
   "plugins": {
     "GoogleAuth": {
       "scopes": [
@@ -10,6 +13,11 @@
       ],
       "serverClientId": "569152179406-ubojvvv8ktncdkbmh17fgo9ssa61ml51.apps.googleusercontent.com",
       "forceCodeForRefreshToken": true
+    },
+    "StatusBar": {
+      "overlaysWebView": true,
+      "style": "DARK",
+      "backgroundColor": "#0a1628"
     }
   }
 }
