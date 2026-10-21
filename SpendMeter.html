@@ -5266,7 +5266,7 @@ function parseStructuredBankSMS(raw){
   // treated as expense (out of the source view) since we only see one side.
   let type = 'expense';
   const lower = raw.toLowerCase();
-  if(/credit transfer|deposit|salary|refund|cashback/i.test(lower) && !/instalment/i.test(lower)) type = 'income';
+  if(/credited|credit transfer|deposit|salary|refund|cashback|received/i.test(lower) && !/instalment/i.test(lower)) type = 'income';
   if(/purchase|withdrawal|سحب|شراء|instalment|debit/i.test(lower)) type = 'expense';
 
   // Description: prefer the specific merchant/place/person field over a
@@ -5302,8 +5302,19 @@ function parseStructuredBankSMS(raw){
   // they're skipped for routing (kept in description context only).
   let acctDigits = null, acctKind = null;
   const bareAcct = v => /^\d{3,6}$/.test(v.trim());
+  // Extract digits from patterns like "**001", "***9461", "**001" (stars followed by digits)
+  const starAcctDigits = v => { const m = v.trim().match(/^\*+(\d{2,6})$/); return m ? m[1] : null; };
   if(fields['from'] && fields['from'].some(bareAcct)) { acctDigits = fields['from'].find(bareAcct); acctKind='bank'; }
   else if(fields['to'] && fields['to'].some(bareAcct)) { acctDigits = fields['to'].find(bareAcct); acctKind='bank'; }
+  // Handle star-masked account numbers like "**001" or "***9461" in From/To fields
+  if(!acctDigits && fields['to']) {
+    const v = fields['to'].map(starAcctDigits).find(Boolean);
+    if(v){ acctDigits = v; acctKind = 'bank'; }
+  }
+  if(!acctDigits && fields['from']) {
+    const v = fields['from'].map(starAcctDigits).find(Boolean);
+    if(v){ acctDigits = v; acctKind = 'bank'; }
+  }
   if(!acctDigits && fields['card']){
     const cardVal = fields['card'][0];
     const cardNumMatch = cardVal.match(/\*+(\d{2,6})/);
@@ -5470,6 +5481,15 @@ function parseSMSText(raw){
   let cardLast4 = null, cardKind = null;
   const fromAcctMatch = raw.match(/from\s*\(\*{2,}(\d{2,6})\)/i);
   if(fromAcctMatch){ cardLast4 = fromAcctMatch[1]; cardKind = 'bank'; }
+  // Handle "To: **001" or "From: **001" label:value format (no parentheses)
+  if(!cardLast4){
+    const toStarMatch = raw.match(/^to\s*:\s*\*+(\d{2,6})\s*$/im);
+    if(toStarMatch){ cardLast4 = toStarMatch[1]; cardKind = 'bank'; }
+  }
+  if(!cardLast4){
+    const fromStarMatch = raw.match(/^from\s*:\s*\*+(\d{2,6})\s*$/im);
+    if(fromStarMatch){ cardLast4 = fromStarMatch[1]; cardKind = 'bank'; }
+  }
   if(!cardLast4){
     const ccMatch = raw.match(/credit card\s*[:\-]?\s*\*?x*(\d{4})/i);
     const dcMatch = raw.match(/debit card\s*[:\-]?\s*\*?x*(\d{4})/i);
