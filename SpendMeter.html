@@ -1002,35 +1002,6 @@ canvas{width:100%; display:block;}
 </head>
 <body>
 
-<!-- ===================== EMAIL LOGIN GATE ===================== -->
-<div class="login-gate" id="emailLoginGate" style="z-index:10002;">
-  <div style="text-align:center; margin-bottom:28px;">
-    <div style="font-size:52px; margin-bottom:8px;">💰</div>
-    <div style="font-size:22px; font-weight:800; letter-spacing:-0.5px;">Spend Meter</div>
-    <div style="font-size:13px; color:rgba(255,255,255,0.5); margin-top:4px;">Track • Plan • Grow</div>
-  </div>
-  <!-- Step 1: Email input -->
-  <div class="login-card" id="loginStep1">
-    <h3>Welcome!</h3>
-    <p>Enter your email to sign in or create an account. We'll send a 6-digit code.</p>
-    <input type="email" class="login-input" id="loginEmailInput" placeholder="your@email.com" autocomplete="email" inputmode="email">
-    <button class="login-btn" id="loginSendBtn" onclick="sendLoginOtp()">Send Code →</button>
-    <div class="login-msg" id="loginMsg1"></div>
-  </div>
-  <!-- Step 2: OTP input -->
-  <div class="login-card" id="loginStep2" style="display:none;">
-    <h3>Check your email ✉️</h3>
-    <p id="loginOtpHint">Enter the 6-digit code we sent.</p>
-    <input type="text" class="login-input" id="loginOtpInput" placeholder="000000" maxlength="6" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" style="text-align:center; font-size:22px; letter-spacing:8px;">
-    <button class="login-btn" id="loginVerifyBtn" onclick="verifyLoginOtp()">Verify & Sign In →</button>
-    <div class="login-msg" id="loginMsg2"></div>
-    <div style="text-align:center; margin-top:10px;">
-      <span style="font-size:12px; color:rgba(255,255,255,0.45); cursor:pointer;" onclick="backToEmailStep()">← Change email</span>
-    </div>
-  </div>
-  <div class="login-footer">Your data is private and encrypted 🔒</div>
-</div>
-
 <!-- ===================== APP LOCK (PIN / biometric) ===================== -->
 <div class="login-gate hidden" id="appLockGate" style="z-index:9999;">
   <div class="login-card" style="text-align:center;">
@@ -2814,86 +2785,40 @@ async function waitSupabase(timeout = 5000) {
   });
 }
 
-/* ---- Email OTP Login Gate ---- */
-let _loginEmail = '';
-
-function showEmailLoginGate() {
-  document.getElementById('emailLoginGate').classList.remove('hidden');
-}
-function hideEmailLoginGate() {
-  document.getElementById('emailLoginGate').classList.add('hidden');
-}
-function backToEmailStep() {
-  document.getElementById('loginStep2').style.display = 'none';
-  document.getElementById('loginStep1').style.display = '';
-  document.getElementById('loginMsg1').textContent = '';
-  document.getElementById('loginMsg1').className = 'login-msg';
-}
-
-async function sendLoginOtp() {
-  const emailEl = document.getElementById('loginEmailInput');
-  const msgEl   = document.getElementById('loginMsg1');
-  const btn     = document.getElementById('loginSendBtn');
-  const email   = (emailEl.value || '').trim().toLowerCase();
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    msgEl.className = 'login-msg err'; msgEl.textContent = 'Please enter a valid email address.'; return;
-  }
-  btn.disabled = true; btn.textContent = 'Sending…';
-  msgEl.textContent = ''; msgEl.className = 'login-msg';
-  try {
-    await waitSupabase();
-    const { error } = await getSupabase().auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
-    if (error) throw error;
-    _loginEmail = email;
-    document.getElementById('loginOtpHint').textContent = 'Enter the 6-digit code sent to ' + email;
-    document.getElementById('loginStep1').style.display = 'none';
-    document.getElementById('loginStep2').style.display = '';
-    document.getElementById('loginOtpInput').value = '';
-    document.getElementById('loginMsg2').textContent = '';
-    document.getElementById('loginMsg2').className = 'login-msg';
-    setTimeout(() => document.getElementById('loginOtpInput').focus(), 200);
-  } catch(e) {
-    msgEl.className = 'login-msg err'; msgEl.textContent = e.message || 'Failed to send code. Try again.';
-  }
-  btn.disabled = false; btn.textContent = 'Send Code →';
-}
-
-async function verifyLoginOtp() {
-  const otpEl = document.getElementById('loginOtpInput');
-  const msgEl = document.getElementById('loginMsg2');
-  const btn   = document.getElementById('loginVerifyBtn');
-  const token = (otpEl.value || '').trim().replace(/\D/g, '');
-  if (token.length !== 6) { msgEl.className='login-msg err'; msgEl.textContent='Enter the 6-digit code from your email.'; return; }
-  btn.disabled = true; btn.textContent = 'Verifying…';
-  msgEl.textContent = ''; msgEl.className = 'login-msg';
-  try {
-    await waitSupabase();
-    const { data, error } = await getSupabase().auth.verifyOtp({ email: _loginEmail, token, type: 'email' });
-    if (error) throw error;
-    hideEmailLoginGate();
-    await _handleSupabaseSession(data.session);
-  } catch(e) {
-    msgEl.className = 'login-msg err'; msgEl.textContent = e.message || 'Invalid or expired code. Try again.';
-    btn.disabled = false; btn.textContent = 'Verify & Sign In →';
-  }
-}
-
-/* ---- App startup auth: restore existing session or show login gate ---- */
+/* ---- Anonymous auth — signs in automatically, no login screen required ---- */
 async function initAnonAuth() {
   await waitSupabase();
 
-  // Try to restore an existing Supabase session (persists across app restarts)
+  // 1. Try to restore an existing Supabase session (persists across app restarts)
   try {
     const { data: { session } } = await getSupabase().auth.getSession();
     if (session && session.user) {
-      hideEmailLoginGate();
       await _handleSupabaseSession(session);
       return;
     }
   } catch(e) { console.warn('getSession error:', e); }
 
-  // No valid session — show email login gate
-  showEmailLoginGate();
+  // 2. No session — sign in anonymously (Supabase creates a stable UUID for this device)
+  try {
+    const { data, error } = await getSupabase().auth.signInAnonymously();
+    if (!error && data.session) {
+      await _handleSupabaseSession(data.session);
+      return;
+    }
+    console.warn('Anonymous sign-in error:', error);
+  } catch(e) { console.warn('signInAnonymously error:', e); }
+
+  // 3. Fallback: generate a local UUID and store in localStorage (offline mode)
+  try {
+    let uid = localStorage.getItem('SM_ANON_UID');
+    if (!uid) {
+      uid = (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random()*16|0; return (c==='x'?r:(r&0x3|0x8)).toString(16);
+      }));
+      localStorage.setItem('SM_ANON_UID', uid);
+    }
+    await onUserSignedIn({ uid, email: '', displayName: 'Device user', photoURL: '', isNewUser: false });
+  } catch(e) { console.warn('Fallback anon auth error:', e); }
 }
 
 function _showGoogleLoginGate() { /* no-op — login gate removed */ }
@@ -2933,7 +2858,7 @@ function updateGoogleSignInUI(user) {
   }
 }
 
-/* ---- Sign out: clears Supabase session and shows login gate ---- */
+/* ---- Sign out: clears Supabase session and local state, then reloads ---- */
 async function handleSignOut() {
   try { await getSupabase().auth.signOut(); } catch(_) {}
 
@@ -2946,15 +2871,12 @@ async function handleSignOut() {
   // Clear local auth state
   currentUser = null;
   try { localStorage.removeItem('SM_CURRENT_USER'); } catch(_) {}
+  try { localStorage.removeItem('SM_ANON_UID'); } catch(_) {}
 
-  showToast('Signed out successfully');
+  showToast('Signed out');
 
-  // Show the email login gate (reset to step 1)
-  setTimeout(() => {
-    backToEmailStep();
-    document.getElementById('loginEmailInput').value = '';
-    showEmailLoginGate();
-  }, 800);
+  // Reload so anonymous auth creates a fresh session
+  setTimeout(() => { location.reload(); }, 1000);
 }
 
 
@@ -3005,7 +2927,7 @@ function onUserSignedOut() {
 const OB_DONE_KEY = 'smOnboardingDone';
 
 async function checkAndShowOnboarding(user) {
-  // Returning users: already have profile data — skip onboarding entirely
+  // Check loaded db object first (works even after cloud restore replaces localStorage)
   if (db && db.profile && db.profile.name) {
     localStorage.setItem(OB_DONE_KEY, user.uid);
     return;
@@ -3022,13 +2944,7 @@ async function checkAndShowOnboarding(user) {
       }
     }
   } catch(_) {}
-  // Returning email user (existing Supabase account, just re-logging in on this device):
-  // Don't show onboarding — they've been here before even if this device doesn't have their data yet
-  if (!user.isNewUser) {
-    // Still set up their profile via cloud pull (already triggered in onUserSignedIn)
-    return;
-  }
-  // Brand-new user — show onboarding/welcome screen
+  // New user (no profile) — show onboarding/welcome screen
   document.getElementById('onboardingOverlay').classList.remove('hidden');
 }
 
