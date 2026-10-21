@@ -2927,25 +2927,8 @@ function onUserSignedOut() {
 const OB_DONE_KEY = 'smOnboardingDone';
 
 async function checkAndShowOnboarding(user) {
-  // Check loaded db object first (works even after cloud restore replaces localStorage)
-  if (db && db.profile && db.profile.name) {
-    localStorage.setItem(OB_DONE_KEY, user.uid);
-    return;
-  }
-  // Fast path: already completed onboarding for this UID
-  if (localStorage.getItem(OB_DONE_KEY) === user.uid) return;
-  try {
-    const raw = localStorage.getItem(STORE_KEY);
-    if (raw) {
-      const stored = JSON.parse(raw);
-      if (stored.profile && stored.profile.name) {
-        localStorage.setItem(OB_DONE_KEY, user.uid);
-        return;
-      }
-    }
-  } catch(_) {}
-  // New user (no profile) — show onboarding/welcome screen
-  document.getElementById('onboardingOverlay').classList.remove('hidden');
+  // Welcome/onboarding screen disabled — skip for all users
+  localStorage.setItem(OB_DONE_KEY, user.uid);
 }
 
 async function saveOnboarding() {
