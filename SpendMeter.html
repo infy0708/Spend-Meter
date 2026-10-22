@@ -1814,8 +1814,13 @@ canvas{width:100%; display:block;}
             <input type="text" id="acctNameInput" placeholder="e.g. Al Rajhi Bank">
           </div>
           <div class="field" id="acctLast4FieldWrap">
-            <label>Last 4 digits <span id="last4Counter" style="float:right; color:var(--ink-soft); font-weight:400;">0/4</span></label>
-            <input type="text" id="acctLast4" maxlength="4" inputmode="numeric" placeholder="Optional but recommended" oninput="updateLast4Counter()">
+            <label>Account last 4 digits <span id="last4Counter" style="float:right; color:var(--ink-soft); font-weight:400;">0/4</span></label>
+            <input type="text" id="acctLast4" maxlength="4" inputmode="numeric" placeholder="e.g. 8582 (account number)" oninput="updateLast4Counter()">
+          </div>
+          <div class="field" id="acctCardLast4FieldWrap">
+            <label>Linked card last 4 digits <span style="float:right; color:var(--ink-soft); font-weight:400; font-size:11px;">optional</span></label>
+            <input type="text" id="acctCardLast4" maxlength="4" inputmode="numeric" placeholder="e.g. 3317 (card number in SMS By: field)">
+            <p class="small-note" style="margin-top:4px;">If your bank SMS shows a card number (e.g. "By: ***3317"), enter it here so transactions are matched to this account.</p>
           </div>
           <div class="two-col">
             <div class="field"><label>Currency</label><select id="acctCurrencySel"></select></div>
@@ -2899,7 +2904,22 @@ async function handleGoogleLoginGate() {
 /* ---- Skip Google login — use anonymous Supabase session ---- */
 async function handleSkipGoogleLogin() {
   _hideGoogleLoginGate();
-  await initAnonAuth();
+  // Sign in anonymously directly (don't call initAnonAuth — that would show the gate again)
+  try {
+    await waitSupabase();
+    const { data, error } = await getSupabase().auth.signInAnonymously();
+    if (error) throw error;
+    if (data && data.session) {
+      await _handleSupabaseSession(data.session);
+      return;
+    }
+  } catch(e) {
+    console.warn('Anonymous sign-in failed, continuing as local user:', e);
+  }
+  // Last resort: continue as a purely local user with no session
+  const localUser = { uid: 'local-' + Date.now(), email: '', displayName: 'Local User', photoURL: '', isNewUser: false };
+  await onUserSignedIn(localUser);
+  updateGoogleSignInUI(localUser);
 }
 
 /* ---- Update sync status in Settings ---- */
@@ -4756,6 +4776,10 @@ function openEditAccount(){
   document.getElementById('acctLast4').value = last4;
   updateLast4Counter();
   document.getElementById('acctLast4FieldWrap').style.display = (a.type==='cash') ? 'none' : 'block';
+  const cardEl = document.getElementById('acctCardLast4');
+  if(cardEl){ cardEl.value = a.linkedCardLast4 || ''; }
+  const cardWrap = document.getElementById('acctCardLast4FieldWrap');
+  if(cardWrap) cardWrap.style.display = (a.type==='cash') ? 'none' : 'block';
   populateCurrencySelect(document.getElementById('acctCurrencySel'), a.currency);
   document.getElementById('acctInitBal').value = a.balance;
   addAcctIncludeTotal = a.includeInTotal !== false;
@@ -5054,6 +5078,7 @@ function saveNewAccount(){
   const nickname = document.getElementById('acctNickname').value.trim();
   const rawName = document.getElementById('acctNameInput').value.trim();
   const last4 = document.getElementById('acctLast4').value.trim();
+  const cardLast4 = (document.getElementById('acctCardLast4') ? document.getElementById('acctCardLast4').value.replace(/\D/g,'').slice(0,4) : '');
   const currency = document.getElementById('acctCurrencySel').value;
   const bal = parseFloat(document.getElementById('acctInitBal').value)||0;
 
@@ -5068,6 +5093,8 @@ function saveNewAccount(){
     a.name = finalName;
     a.currency = currency;
     a.includeInTotal = addAcctIncludeTotal;
+    if(cardLast4) a.linkedCardLast4 = cardLast4;
+    else if(a.linkedCardLast4 && !cardLast4) delete a.linkedCardLast4;
     // Balance here is an opening/reference balance for a newly-created
     // account, not a running total — only overwrite it if it actually
     // changed, so editing details doesn't silently wipe transaction history.
@@ -5092,11 +5119,13 @@ function saveNewAccount(){
   else if(addAcctType==='wallet') color = 'purple';
   else color = 'green';
 
-  db.accounts.push({
+  const newAcct = {
     id:uid(), name:finalName, type:addAcctType, currency, balance: addAcctIncludeTotal ? bal : bal,
     color, includeInTotal: addAcctIncludeTotal, subtype: addAcctType==='bank' ? 'Current' : '',
     createdAt: Date.now(), balanceHistory:[{amount:bal, capturedAt:new Date().toISOString(), nickname:'Opening balance'}]
-  });
+  };
+  if(cardLast4) newAcct.linkedCardLast4 = cardLast4;
+  db.accounts.push(newAcct);
   save();
   closeSheet('sheetAddAccount');
   renderAccountsSheet(); renderHeader(); renderNetWorth();
@@ -5333,11 +5362,16 @@ function parseStructuredBankSMS(raw){
   // Account digits: prefer a bank ACCOUNT suffix (From:/To: a bare short
   // number like "8582", "0300") over a CARD's own last-4 (Card:*9461), since
   // the account is what actually distinguishes the user's real accounts.
-  // "By:4659;mada" style tags are card-ish but not reliably routable, so
-  // they're skipped for routing (kept in description context only).
-  let acctDigits = null, acctKind = null;
+  // Account/card digit extraction strategy:
+  // 1. Prefer bare account number from From:/To: (e.g. "8582", "0300")
+  // 2. Star-masked account "**001" from From:/To:
+  // 3. Card number from Card:/Credit Card: field
+  // 4. Card number from "By: ***3317;mada" field (SAB/STC format)
+  // Card digits from "By:" are stored separately as byCardDigits so we
+  // can first try matching account by account number, then by linkedCardLast4.
+  let acctDigits = null, acctKind = null, byCardDigits = null;
   const bareAcct = v => /^\d{3,6}$/.test(v.trim());
-  // Extract digits from patterns like "**001", "***9461", "**001" (stars followed by digits)
+  // Extract digits from patterns like "**001", "***9461" (stars followed by digits)
   const starAcctDigits = v => { const m = v.trim().match(/^\*+(\d{2,6})$/); return m ? m[1] : null; };
   if(fields['from'] && fields['from'].some(bareAcct)) { acctDigits = fields['from'].find(bareAcct); acctKind='bank'; }
   else if(fields['to'] && fields['to'].some(bareAcct)) { acctDigits = fields['to'].find(bareAcct); acctKind='bank'; }
@@ -5358,6 +5392,17 @@ function parseStructuredBankSMS(raw){
   if(!acctDigits && fields['credit card']){
     const cardNumMatch = fields['credit card'][0].match(/\*+(\d{2,6})/);
     if(cardNumMatch){ acctDigits = cardNumMatch[1]; acctKind='card'; }
+  }
+  // "By: ***3317;mada" — card number in the By field (SAB, STC Bank format)
+  // Keep this separate so we can match against linkedCardLast4 on accounts
+  if(fields['by']){
+    const byMatch = fields['by'][0].match(/\*+(\d{2,6})/);
+    if(byMatch) byCardDigits = byMatch[1];
+  }
+  // Also check prose "Card (3317) from (***001)" pattern in raw text
+  if(!byCardDigits){
+    const proseCardMatch = raw.match(/\bCard\s*\((\d{3,6})\)/i);
+    if(proseCardMatch) byCardDigits = proseCardMatch[1];
   }
 
   // Date/time — formats seen: "2026-9-9 22:22" (ISO, unambiguous), and
@@ -5396,12 +5441,20 @@ function parseStructuredBankSMS(raw){
   if(type==='income' && category==='other') category='salary';
 
   let acc = null, willCreateAccount = null;
-  if(acctDigits){
+  // 1. Try matching by "By: ***3317;mada" card number → linkedCardLast4
+  if(!acc && byCardDigits){
+    acc = db.accounts.find(a => a.linkedCardLast4 && a.linkedCardLast4 === byCardDigits && !a.archived);
+  }
+  // 2. Try matching by account digits (From:/To:) → account name contains digits OR linkedCardLast4
+  if(!acc && acctDigits){
     acc = db.accounts.find(a => a.name.includes(acctDigits) && !a.archived);
+    // Also try linkedCardLast4 match for the acct digits
+    if(!acc) acc = db.accounts.find(a => a.linkedCardLast4 && a.linkedCardLast4 === acctDigits && !a.archived);
     if(!acc){
       willCreateAccount = { name:(acctKind==='card'?'Card ':'Bank ')+acctDigits, type:acctKind, currency, color: ACCOUNT_COLORS[Math.floor(Math.random()*ACCOUNT_COLORS.length)].id };
     }
   }
+  // 3. Fallback: match by currency, then any non-archived account
   if(!acc && !willCreateAccount){
     acc = db.accounts.find(a=>a.currency===currency && !a.archived) || db.accounts.find(a=>!a.archived);
   }
@@ -5533,6 +5586,17 @@ function parseSMSText(raw){
     else if(dcMatch){ cardLast4 = dcMatch[1]; cardKind = 'bank'; }
     else if(genCardMatch){ cardLast4 = genCardMatch[1]; cardKind = 'card'; }
   }
+  // "By: ***3317;mada" or "By: ***3317" — SAB/STC card field separate from account number
+  let byCardDigits = null;
+  if(!byCardDigits){
+    const byMatch = raw.match(/^by\s*:\s*\*+(\d{2,6})(?:[;\s]|$)/im);
+    if(byMatch) byCardDigits = byMatch[1];
+  }
+  // "Card (3317)" prose pattern
+  if(!byCardDigits){
+    const proseCardMatch = raw.match(/\bCard\s*\((\d{3,6})\)/i);
+    if(proseCardMatch) byCardDigits = proseCardMatch[1];
+  }
 
   // Category — try user-defined rules first, then smart keyword matching
   let category = null;
@@ -5550,9 +5614,15 @@ function parseSMSText(raw){
   if(dtMatch){ date = dtMatch[1]; time = dtMatch[2]; }
 
   let acc = null, willCreateAccount = null;
+  // 1. Try matching by "By: ***3317" card digits → linkedCardLast4 on account
+  if(!acc && byCardDigits){
+    acc = db.accounts.find(a => a.linkedCardLast4 && a.linkedCardLast4 === byCardDigits && !a.archived);
+  }
   if(cardLast4){
-    // Match against account name OR the stored accountNumber field (last N digits)
-    acc = db.accounts.find(a => !a.archived && (
+    // 2. Match against linkedCardLast4 first (most explicit link)
+    if(!acc) acc = db.accounts.find(a => a.linkedCardLast4 && a.linkedCardLast4 === cardLast4 && !a.archived);
+    // 3. Match against account name OR the stored accountNumber field (last N digits)
+    if(!acc) acc = db.accounts.find(a => !a.archived && (
       a.name.includes(cardLast4) ||
       (a.accountNumber && a.accountNumber.toString().endsWith(cardLast4))
     ));
