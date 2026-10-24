@@ -2837,7 +2837,7 @@ async function waitSupabase(timeout = 5000) {
   });
 }
 
-/* ---- Anonymous auth — signs in automatically, no login screen required ---- */
+/* ---- Auth init — restore real (email) session silently, else show login gate ---- */
 async function initAnonAuth() {
   await waitSupabase();
 
@@ -2845,12 +2845,19 @@ async function initAnonAuth() {
   try {
     const { data: { session } } = await getSupabase().auth.getSession();
     if (session && session.user) {
-      await _handleSupabaseSession(session);
-      return;
+      const isAnon = session.user.is_anonymous === true ||
+                     (session.user.app_metadata && session.user.app_metadata.provider === 'anonymous');
+      if (!isAnon) {
+        // Real email session — restore silently, skip login screen
+        await _handleSupabaseSession(session);
+        return;
+      }
+      // Anonymous session — still show login gate so user can sign in properly
+      // (their local data is preserved either way)
     }
   } catch(e) { console.warn('getSession error:', e); }
 
-  // 2. No existing session — show Google Sign-In gate
+  // 2. No real session — show login gate
   _showGoogleLoginGate();
 }
 
@@ -6150,6 +6157,11 @@ function deleteTransactionEverywhere(txnId){
   const allTxnsOpen = document.getElementById('ov-sheetAllTxns') && document.getElementById('ov-sheetAllTxns').classList.contains('show');
   if(allTxnsOpen){
     renderAllTxns();
+  }
+  // Same for the Account Detail sheet — refresh transaction list immediately.
+  const acctDetailOpen = document.getElementById('ov-sheetAccountDetail') && document.getElementById('ov-sheetAccountDetail').classList.contains('show');
+  if(acctDetailOpen){
+    renderAcctDetailTxns();
   }
 }
 let catPickParentView = null; // when set, we're viewing subcategories of this parent id
