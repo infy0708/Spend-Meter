@@ -936,6 +936,16 @@ canvas{width:100%; display:block;}
 .login-msg.ok{color:var(--green-l);}
 .login-msg.err{color:#ff8a7a;}
 .login-footer{margin-top:22px; font-size:11px; color:rgba(255,255,255,0.35); text-align:center;}
+/* PIN dots */
+.pin-dot{width:18px; height:18px; border-radius:50%; border:2px solid rgba(255,255,255,0.35); background:transparent; transition:background .15s, border-color .15s;}
+.pin-dot.filled{background:#fff; border-color:#fff;}
+/* PIN numpad */
+.pin-pad{display:grid; grid-template-columns:repeat(3,1fr); gap:10px; max-width:240px; margin:0 auto;}
+.pin-key{height:56px; border-radius:14px; border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.08);
+  color:#fff; font-size:22px; font-weight:600; cursor:pointer; display:flex; align-items:center; justify-content:center;
+  user-select:none; -webkit-tap-highlight-color:transparent; transition:background .1s;}
+.pin-key:active{background:rgba(255,255,255,0.22);}
+.pin-key.del{font-size:18px;}
 
 /* ===================== ONBOARDING MODAL ===================== */
 .onboarding-overlay{position:fixed; inset:0; z-index:10000; background:var(--navy);
@@ -1004,22 +1014,22 @@ canvas{width:100%; display:block;}
 
 <!-- ===================== GOOGLE SIGN-IN GATE ===================== -->
 <div class="login-gate" id="googleLoginGate" style="z-index:10001;">
-  <div style="text-align:center; margin-bottom:32px;">
+  <div style="text-align:center; margin-bottom:28px;">
     <div style="font-size:52px; margin-bottom:10px;">💸</div>
     <div style="font-size:26px; font-weight:800; letter-spacing:-0.5px;">SpendMeter</div>
     <div style="font-size:13px; color:rgba(255,255,255,0.5); margin-top:4px;">Your personal finance tracker</div>
   </div>
 
-  <!-- Step 1: Email entry -->
-  <div class="login-card" id="loginStepEmail" style="text-align:center;">
-    <h3 style="font-size:17px; margin-bottom:6px;">Sign in</h3>
-    <p style="margin-bottom:16px;">Enter your email — we'll send a 6-digit code to verify it's you.</p>
+  <!-- Step 1: Email entry (first-time setup) -->
+  <div class="login-card hidden" id="loginStepEmail" style="text-align:center;">
+    <h3 style="font-size:17px; margin-bottom:6px;">Create your account</h3>
+    <p style="margin-bottom:16px;">Enter your email so we can identify your data on this device.</p>
     <input id="loginEmailInput" type="email" inputmode="email" autocomplete="email"
       placeholder="you@example.com"
       style="width:100%; box-sizing:border-box; padding:13px 14px; border-radius:12px; border:1.5px solid rgba(255,255,255,0.15); background:rgba(255,255,255,0.07); color:#fff; font-size:15px; margin-bottom:12px; outline:none;"
-      onkeydown="if(event.key==='Enter') sendLoginOtp()">
-    <button class="login-btn" id="sendOtpBtn" onclick="sendLoginOtp()" style="font-size:14px; font-weight:700; padding:14px;">
-      Send Code
+      onkeydown="if(event.key==='Enter') proceedToSetPin()">
+    <button class="login-btn" onclick="proceedToSetPin()" style="font-size:14px; font-weight:700; padding:14px;">
+      Next →
     </button>
     <div class="login-msg err" id="loginEmailMsg" style="margin-top:10px;"></div>
     <div style="margin-top:16px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.1);">
@@ -1027,26 +1037,50 @@ canvas{width:100%; display:block;}
     </div>
   </div>
 
-  <!-- Step 2: OTP entry -->
-  <div class="login-card hidden" id="loginStepOtp" style="text-align:center;">
-    <h3 style="font-size:17px; margin-bottom:6px;">Enter your code</h3>
-    <p id="loginOtpDesc" style="margin-bottom:16px;">We sent a 6-digit code to your email.</p>
-    <input id="loginOtpInput" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code"
-      placeholder="000000"
-      style="width:100%; box-sizing:border-box; padding:16px 14px; border-radius:12px; border:1.5px solid rgba(255,255,255,0.15); background:rgba(255,255,255,0.07); color:#fff; font-size:26px; letter-spacing:8px; text-align:center; margin-bottom:12px; outline:none;"
-      oninput="this.value=this.value.replace(/\D/g,''); if(this.value.length===6) verifyLoginOtp()"
-      onkeydown="if(event.key==='Enter') verifyLoginOtp()">
-    <button class="login-btn" id="verifyOtpBtn" onclick="verifyLoginOtp()" style="font-size:14px; font-weight:700; padding:14px;">
-      Verify & Sign In
-    </button>
-    <div class="login-msg err" id="loginOtpMsg" style="margin-top:10px;"></div>
-    <div style="margin-top:14px; display:flex; gap:16px; justify-content:center; font-size:12px; color:rgba(255,255,255,0.4);">
-      <span style="cursor:pointer;" onclick="showLoginEmailStep()">← Change email</span>
-      <span style="cursor:pointer;" onclick="sendLoginOtp(true)">Resend code</span>
+  <!-- Step 2: Set PIN (first-time) -->
+  <div class="login-card hidden" id="loginStepSetPin" style="text-align:center;">
+    <h3 style="font-size:17px; margin-bottom:4px;">Create a 4-digit PIN</h3>
+    <p style="margin-bottom:16px; font-size:12px; color:rgba(255,255,255,0.5);">You'll use this PIN every time you open SpendMeter.</p>
+    <div id="pinDots1" style="display:flex; justify-content:center; gap:14px; margin-bottom:20px;">
+      <div class="pin-dot" id="pd1_1"></div><div class="pin-dot" id="pd1_2"></div>
+      <div class="pin-dot" id="pd1_3"></div><div class="pin-dot" id="pd1_4"></div>
+    </div>
+    <div class="pin-pad" id="pinPad1"></div>
+    <div class="login-msg err" id="setPinMsg" style="margin-top:10px;"></div>
+  </div>
+
+  <!-- Step 3: Confirm PIN (first-time) -->
+  <div class="login-card hidden" id="loginStepConfirmPin" style="text-align:center;">
+    <h3 style="font-size:17px; margin-bottom:4px;">Confirm your PIN</h3>
+    <p style="margin-bottom:16px; font-size:12px; color:rgba(255,255,255,0.5);">Enter the same PIN again to confirm.</p>
+    <div id="pinDots2" style="display:flex; justify-content:center; gap:14px; margin-bottom:20px;">
+      <div class="pin-dot" id="pd2_1"></div><div class="pin-dot" id="pd2_2"></div>
+      <div class="pin-dot" id="pd2_3"></div><div class="pin-dot" id="pd2_4"></div>
+    </div>
+    <div class="pin-pad" id="pinPad2"></div>
+    <div class="login-msg err" id="confirmPinMsg" style="margin-top:10px;"></div>
+    <div style="margin-top:10px;">
+      <span style="font-size:12px; color:rgba(255,255,255,0.4); cursor:pointer;" onclick="_pinEntry1='';_pinEntry2='';_updateDots('pd1_','');showLoginStep('loginStepSetPin')">← Back</span>
     </div>
   </div>
 
-  <div class="login-footer">Your data is encrypted and stored securely.</div>
+  <!-- Step 4: Enter PIN (returning user) -->
+  <div class="login-card hidden" id="loginStepEnterPin" style="text-align:center;">
+    <div style="font-size:13px; color:rgba(255,255,255,0.45); margin-bottom:4px;" id="loginPinEmail"></div>
+    <h3 style="font-size:17px; margin-bottom:4px;">Enter your PIN</h3>
+    <p style="margin-bottom:16px; font-size:12px; color:rgba(255,255,255,0.5);">Use your 4-digit PIN to open SpendMeter.</p>
+    <div id="pinDots3" style="display:flex; justify-content:center; gap:14px; margin-bottom:20px;">
+      <div class="pin-dot" id="pd3_1"></div><div class="pin-dot" id="pd3_2"></div>
+      <div class="pin-dot" id="pd3_3"></div><div class="pin-dot" id="pd3_4"></div>
+    </div>
+    <div class="pin-pad" id="pinPad3"></div>
+    <div class="login-msg err" id="enterPinMsg" style="margin-top:10px;"></div>
+    <div style="margin-top:14px;">
+      <span style="font-size:12px; color:rgba(255,255,255,0.4); cursor:pointer;" onclick="handleSkipGoogleLogin()">Continue without signing in →</span>
+    </div>
+  </div>
+
+  <div class="login-footer">Your data is stored securely on this device.</div>
 </div>
 
 <!-- ===================== APP LOCK (PIN / biometric) ===================== -->
@@ -2862,8 +2896,7 @@ async function initAnonAuth() {
 }
 
 function _showGoogleLoginGate() {
-  const gate = document.getElementById('googleLoginGate');
-  if (gate) gate.classList.remove('hidden');
+  _showLoginGateWithPin();
 }
 function _hideGoogleLoginGate() {
   const gate = document.getElementById('googleLoginGate');
@@ -2893,82 +2926,173 @@ async function _handleSupabaseSession(session) {
   updateGoogleSignInUI(user);
 }
 
-/* ---- Email OTP sign-in ---- */
-let _loginOtpEmail = '';
+/* ================================================================
+   PIN-BASED LOGIN  (no email delivery needed)
+   Storage keys:  SM_PIN_HASH, SM_PIN_EMAIL
+   ================================================================ */
+const PIN_HASH_KEY  = 'SM_PIN_HASH';
+const PIN_EMAIL_KEY = 'SM_PIN_EMAIL';
 
-function showLoginEmailStep() {
-  document.getElementById('loginStepEmail').classList.remove('hidden');
-  document.getElementById('loginStepOtp').classList.add('hidden');
-  document.getElementById('loginEmailMsg').textContent = '';
-  const inp = document.getElementById('loginEmailInput');
-  if(inp){ inp.value = _loginOtpEmail || ''; inp.focus(); }
+/* Simple djb2-style hash — good enough for a local 4-digit PIN */
+function _hashPin(pin) {
+  let h = 5381;
+  for(let i=0; i<pin.length; i++) h = ((h<<5)+h) ^ pin.charCodeAt(i);
+  return (h >>> 0).toString(36);
 }
 
-async function sendLoginOtp(isResend) {
+let _pinEntry1 = ''; // buffer during "set" step
+let _pinEntry2 = ''; // buffer during "confirm" step
+let _pinEntry3 = ''; // buffer during "enter" step
+
+function showLoginStep(id) {
+  ['loginStepEmail','loginStepSetPin','loginStepConfirmPin','loginStepEnterPin']
+    .forEach(s => { const el=document.getElementById(s); if(el) el.classList.add('hidden'); });
+  const target = document.getElementById(id);
+  if(target) target.classList.remove('hidden');
+}
+
+/* Build a numeric key-pad into element #padId, wiring each press to cb(digit) */
+function _buildPinPad(padId, cb) {
+  const pad = document.getElementById(padId);
+  if(!pad) return;
+  const keys = ['1','2','3','4','5','6','7','8','9','','0','⌫'];
+  pad.innerHTML = keys.map(k => k===''
+    ? `<div></div>`
+    : `<div class="pin-key${k==='⌫'?' del':''}" ontouchstart="void(0)" onclick="_pinKeyPress('${padId}','${k}')">${k}</div>`
+  ).join('');
+}
+
+function _pinKeyPress(padId, key) {
+  if(padId==='pinPad1') _pinPad1Press(key);
+  else if(padId==='pinPad2') _pinPad2Press(key);
+  else if(padId==='pinPad3') _pinPad3Press(key);
+}
+
+/* Update visual dots for a 4-digit buffer */
+function _updateDots(prefix, val) {
+  for(let i=1;i<=4;i++){
+    const d=document.getElementById(prefix+i);
+    if(d) d.classList.toggle('filled', i<=val.length);
+  }
+}
+
+/* ---- Step 1: Email ---- */
+function showLoginEmailStep() {
+  showLoginStep('loginStepEmail');
+  const inp = document.getElementById('loginEmailInput');
+  if(inp) setTimeout(()=>inp.focus(), 100);
+}
+function proceedToSetPin() {
   const inp = document.getElementById('loginEmailInput');
   const msg = document.getElementById('loginEmailMsg');
-  const btn = document.getElementById('sendOtpBtn');
-  const email = (inp ? inp.value.trim() : '') || _loginOtpEmail;
+  const email = inp ? inp.value.trim() : '';
   if(!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     if(msg) msg.textContent = 'Please enter a valid email address.';
     return;
   }
-  _loginOtpEmail = email;
-  if(msg) msg.textContent = '';
-  if(btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
-  try {
-    await waitSupabase();
-    const { error } = await getSupabase().auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
-    if(error) throw error;
-    // Show OTP step
-    const descEl = document.getElementById('loginOtpDesc');
-    if(descEl) descEl.textContent = 'We sent a 6-digit code to ' + email + '. Check your inbox (or spam folder).';
-    document.getElementById('loginStepEmail').classList.add('hidden');
-    document.getElementById('loginStepOtp').classList.remove('hidden');
-    document.getElementById('loginOtpMsg').textContent = isResend ? 'New code sent!' : '';
-    setTimeout(() => {
-      const otpInp = document.getElementById('loginOtpInput');
-      if(otpInp){ otpInp.value = ''; otpInp.focus(); }
-    }, 100);
-  } catch(e) {
-    if(msg) msg.textContent = e.message || 'Failed to send code. Try again.';
-  } finally {
-    if(btn) { btn.disabled = false; btn.textContent = 'Send Code'; }
+  localStorage.setItem(PIN_EMAIL_KEY, email);
+  _pinEntry1 = '';
+  _updateDots('pd1_', '');
+  _buildPinPad('pinPad1');
+  document.getElementById('setPinMsg').textContent = '';
+  showLoginStep('loginStepSetPin');
+}
+
+/* ---- Step 2: Set PIN ---- */
+function _pinPad1Press(key) {
+  if(key==='⌫'){ _pinEntry1=_pinEntry1.slice(0,-1); _updateDots('pd1_',_pinEntry1); return; }
+  if(_pinEntry1.length>=4) return;
+  _pinEntry1 += key;
+  _updateDots('pd1_', _pinEntry1);
+  if(_pinEntry1.length===4){
+    _pinEntry2='';
+    _updateDots('pd2_','');
+    _buildPinPad('pinPad2');
+    document.getElementById('confirmPinMsg').textContent='';
+    setTimeout(()=>showLoginStep('loginStepConfirmPin'),150);
   }
 }
 
-async function verifyLoginOtp() {
-  const inp = document.getElementById('loginOtpInput');
-  const msg = document.getElementById('loginOtpMsg');
-  const btn = document.getElementById('verifyOtpBtn');
-  const token = inp ? inp.value.trim() : '';
-  if(!token || token.length < 6) {
-    if(msg) msg.textContent = 'Enter the 6-digit code from your email.';
-    return;
-  }
-  if(msg) msg.textContent = '';
-  if(btn) { btn.disabled = true; btn.textContent = 'Verifying…'; }
-  try {
-    await waitSupabase();
-    const { data, error } = await getSupabase().auth.verifyOtp({
-      email: _loginOtpEmail,
-      token,
-      type: 'email'
-    });
-    if(error) throw error;
-    if(data && data.session) {
-      await _handleSupabaseSession(data.session);
+/* ---- Step 3: Confirm PIN ---- */
+function _pinPad2Press(key) {
+  if(key==='⌫'){ _pinEntry2=_pinEntry2.slice(0,-1); _updateDots('pd2_',_pinEntry2); return; }
+  if(_pinEntry2.length>=4) return;
+  _pinEntry2 += key;
+  _updateDots('pd2_', _pinEntry2);
+  if(_pinEntry2.length===4){
+    if(_pinEntry2 !== _pinEntry1){
+      document.getElementById('confirmPinMsg').textContent = 'PINs do not match — try again.';
+      setTimeout(()=>{ _pinEntry1=''; _pinEntry2=''; _updateDots('pd1_',''); showLoginStep('loginStepSetPin'); },900);
       return;
     }
-    throw new Error('Verification failed. Please try again.');
-  } catch(e) {
-    if(msg) msg.textContent = e.message || 'Wrong code — please try again.';
-    if(btn) { btn.disabled = false; btn.textContent = 'Verify & Sign In'; }
+    // Save PIN hash and sign in
+    localStorage.setItem(PIN_HASH_KEY, _hashPin(_pinEntry1));
+    _completeLocalLogin();
   }
 }
 
-/* legacy: kept so any old references don't break */
-async function handleGoogleLoginGate() { showLoginEmailStep(); }
+/* ---- Step 4: Enter PIN (returning user) ---- */
+function _pinPad3Press(key) {
+  if(key==='⌫'){ _pinEntry3=_pinEntry3.slice(0,-1); _updateDots('pd3_',_pinEntry3); return; }
+  if(_pinEntry3.length>=4) return;
+  _pinEntry3 += key;
+  _updateDots('pd3_', _pinEntry3);
+  if(_pinEntry3.length===4){
+    const stored = localStorage.getItem(PIN_HASH_KEY);
+    if(_hashPin(_pinEntry3)===stored){
+      _completeLocalLogin();
+    } else {
+      document.getElementById('enterPinMsg').textContent='Wrong PIN — try again.';
+      setTimeout(()=>{ _pinEntry3=''; _updateDots('pd3_',''); document.getElementById('enterPinMsg').textContent=''; },800);
+    }
+  }
+}
+
+/* Shared sign-in completion — sign in to Supabase anonymously so sync works */
+async function _completeLocalLogin() {
+  _hideGoogleLoginGate();
+  const email = localStorage.getItem(PIN_EMAIL_KEY) || '';
+  try {
+    await waitSupabase();
+    // Try to sign in with existing session first
+    const { data: { session } } = await getSupabase().auth.getSession();
+    if(session && session.user){ await _handleSupabaseSession(session); return; }
+    // No session — sign in anonymously (data sync)
+    const { data, error } = await getSupabase().auth.signInAnonymously();
+    if(!error && data && data.session){ await _handleSupabaseSession(data.session); return; }
+  } catch(e){ console.warn('Auth error on PIN login:', e); }
+  // Fallback: local user
+  const localUser = { uid: 'local-pin-' + (email||Date.now()), email, displayName: email||'User', photoURL:'', isNewUser:false };
+  await onUserSignedIn(localUser);
+  updateGoogleSignInUI(localUser);
+}
+
+/* Entry point called by initAnonAuth when no session → decide which PIN step to show */
+function _showLoginGateWithPin() {
+  const gate = document.getElementById('googleLoginGate');
+  if(gate) gate.classList.remove('hidden');
+  const hasPin   = !!localStorage.getItem(PIN_HASH_KEY);
+  const hasEmail = !!localStorage.getItem(PIN_EMAIL_KEY);
+  if(hasPin){
+    // Returning user — show Enter PIN
+    const emailEl = document.getElementById('loginPinEmail');
+    if(emailEl) emailEl.textContent = localStorage.getItem(PIN_EMAIL_KEY)||'';
+    _pinEntry3='';
+    _updateDots('pd3_','');
+    _buildPinPad('pinPad3');
+    document.getElementById('enterPinMsg').textContent='';
+    showLoginStep('loginStepEnterPin');
+  } else {
+    // New user — start with email
+    showLoginStep('loginStepEmail');
+  }
+}
+
+/* legacy stubs so no old calls break */
+function showLoginEmailStep() { showLoginStep('loginStepEmail'); }
+async function handleGoogleLoginGate() { _showLoginGateWithPin(); }
+async function sendLoginOtp() {}
+async function verifyLoginOtp() {}
 
 /* ---- Skip Google login — use anonymous Supabase session ---- */
 async function handleSkipGoogleLogin() {
