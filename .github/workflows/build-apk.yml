@@ -52,6 +52,31 @@ jobs:
         if: steps.check.outputs.ready == 'true'
         run: |
           npx cap add android
+          # Register GoogleAuth plugin in MainActivity.java
+          python3 << 'PYEOF'
+          import re, glob
+          files = glob.glob('android/app/src/main/java/**/MainActivity.java', recursive=True)
+          if files:
+              path = files[0]
+              src = open(path).read()
+              if 'GoogleAuth' not in src:
+                  src = re.sub(
+                      r'(import com\.getcapacitor\.BridgeActivity;)',
+                      r'\1\nimport com.codetrixstudio.capacitor.GoogleAuth.GoogleAuth;',
+                      src
+                  )
+                  src = re.sub(
+                      r'(public class MainActivity extends BridgeActivity \{)',
+                      r'\1\n  @Override\n  public void onCreate(android.os.Bundle savedInstanceState) {\n    registerPlugin(GoogleAuth.class);\n    super.onCreate(savedInstanceState);\n  }',
+                      src
+                  )
+                  open(path, 'w').write(src)
+                  print('Registered GoogleAuth plugin in', path)
+              else:
+                  print('GoogleAuth already registered')
+          else:
+              print('MainActivity.java not found!')
+          PYEOF
           python3 patch_android.py ${{ github.run_number }}
           # Inject Google OAuth server_client_id into Android strings.xml
           python3 << 'PYEOF'
